@@ -41,7 +41,15 @@ CAMRAPID_WEBHOOK_URL = os.environ.get(
     "CAMRAPID_WEBHOOK_URL",
     f"{PUBLIC_BASE_URL.rstrip('/')}/camrapid-webhook" if PUBLIC_BASE_URL else "",
 )
-STORE_NAME = os.environ.get("STORE_NAME", "Kairozen Premium Shop")
+STORE_NAME = "Kairozen Store"  # ឈ្មោះហាង — ដាក់ hardcode ត្រង់នេះ (មិនប្រើ env var ទៀតទេ)
+# ID របស់ channel/group ដែលចង់ឲ្យ bot ផ្ញើសារជូនដំណឹងស្វ័យប្រវត្តិ ពេលមាន deposit
+# ឬ order ជោគជ័យ។ ដាក់ hardcode ត្រង់នេះផ្ទាល់ (negative number ឧ. -1001234567890
+# សម្រាប់ channel/supergroup) — អាចដាក់ច្រើនក្នុងមួយ list បាន ១ សម្រាប់ channel ១ សម្រាប់ group។
+# ចាំបាច់: bot ត្រូវជា admin (មាន permission ផ្ញើសារ) នៅក្នុង channel/group នោះជាមុនសិន។
+NOTIFY_CHAT_IDS = [
+    -1004440559295,   # <- Kairozen Store
+    # -1002222222222,   # <- ដាក់ ID ទីពីរនៅទីនេះ បើមាន channel/group ថែមទៀត
+]
 
 DATA_DIR = "data"
 STOCK_DIR = os.path.join(DATA_DIR, "stock")
@@ -52,7 +60,47 @@ EMOJI_FILE = os.path.join(DATA_DIR, "premium_emoji.json")
 
 os.makedirs(STOCK_DIR, exist_ok=True)
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+class _LoggingExceptionHandler(telebot.ExceptionHandler):
+    """បើគ្មាន handler នេះ pyTelegramBotAPI នឹងលេប exception ចោលស្ងាត់ៗ ពេល handler
+    ណាមួយ crash (ឧ. Telegram server បដិសេធ style/icon_custom_emoji_id នៅពេលផ្ញើពិត
+    ដែលមិនមែនជា TypeError ដូច្នេះ pbtn()/preply_btn() ចាប់មិនបាន) — user ចុច button
+    ហើយគ្មានអ្វីកើតឡើងសោះ គ្មាន log អោយឃើញមូលហេតុ។ handler នេះធ្វើឲ្យ error print
+    ចេញ terminal/Render logs ជានិច្ច ហើយ bot បន្តដំណើរការធម្មតាសម្រាប់ update បន្ទាប់។"""
+    def handle(self, exception):
+        import traceback
+        print("[UNHANDLED EXCEPTION]", flush=True)
+        traceback.print_exc()
+        return True  # បញ្ជាក់ថា handled រួច កុំឲ្យ polling ដួល
+
+
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", exception_handler=_LoggingExceptionHandler())
+
+
+def public_user_label(user):
+    """label សម្រាប់បង្ហាញជាសាធារណៈក្នុង channel/group — ប្រើ @username បើមាន
+    ឬ first_name បើគ្មាន username (កុំបង្ហាញ user id ពេញលេញជាសាធារណៈ)"""
+    if not user:
+        return "User"
+    username = getattr(user, "username", None)
+    if username:
+        return f"@{username}"
+    return getattr(user, "first_name", None) or "User"
+
+
+def notify_public(text):
+    """ផ្ញើសារទៅ channel/group ទាំងអស់ក្នុង NOTIFY_CHAT_IDS (ឧ. deposit/order ជោគជ័យ)
+    ដើម្បីបង្ហាញសកម្មភាពលក់ជាសាធារណៈ។ Bot ត្រូវបានបន្ថែមជា admin របស់ channel/group
+    នោះជាមុនសិន (មាន permission ផ្ញើសារ) បើមិនដូច្នេះទេការផ្ញើនឹងបរាជ័យ — ខ្ញុំចាប់
+    Exception ទុកនៅទីនេះ ដើម្បីកុំឲ្យប៉ះពាល់ដល់ flow ចម្បង (order/deposit) បើ channel
+    មួយផ្ញើមិនចេញ។"""
+    if not NOTIFY_CHAT_IDS:
+        return
+    for cid in NOTIFY_CHAT_IDS:
+        try:
+            bot.send_message(cid, text)
+        except Exception as e:
+            print(f"[notify_public] failed to send to {cid}: {e}", flush=True)
+
 
 # ------------------------------------------------------------------
 # PREMIUM EMOJI SYSTEM (Bot API 9.4+, ត្រូវការ Telegram Premium)
@@ -140,9 +188,14 @@ def emoji_icon_for(text):
 
 def _strip_glyph(text, glyph):
     """លុប glyph ធម្មតាចេញពី label (ព្រោះ icon premium បង្ហាញជំនួសរួចហើយ —
-    កុំឲ្យ emoji ចាស់លេចមកជាមួយ icon ថ្មីស្ទួនគ្នា)"""
+    កុំឲ្យ emoji ចាស់លេចមកជាមួយ icon ថ្មីស្ទួនគ្នា)។
+    ចំណាំ: បើ label ទាំងមូលគឺ glyph នោះឯង (ឧ. ប៊ូតុង "➕"/"➖" នៅក្នុងអ្នកជ្រើសចំនួន)
+    ការលុបនឹងធ្វើឲ្យ label ទទេ — Telegram បដិសេធ button text ទទេ ដែលធ្វើឲ្យទាំង
+    keyboard ខូចអស់ (ប៊ូតុងផ្សេងទៀតក៏ដំណើរការមិនកើតដែរ ព្រោះវាជា API call តែមួយ)។
+    ដូច្នេះបើលុបហើយទទេ យើងរក្សា text ដើមទុក (មិនលុប) ជាជាងឲ្យ label ទទេ។"""
     cleaned = text.replace(glyph, "", 1)
-    return re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned if cleaned else text
 
 
 def pbtn(text, callback_data=None, style=None, url=None, **kw):
@@ -164,6 +217,19 @@ def pbtn(text, callback_data=None, style=None, url=None, **kw):
         except TypeError:
             continue
     return types.InlineKeyboardButton(text, callback_data=callback_data, url=url, **kw)
+
+
+def norm_label(text):
+    """ត្រឡប់ text ដូចគ្នានឹងអ្វីដែល preply_btn()/pbtn() ពិតជាផ្ញើទៅ Telegram
+    (បើ glyph មាន premium icon រួច នឹងលុប glyph ធម្មតាចេញ ដូច _strip_glyph ធ្វើ)។
+    ត្រូវប្រើ function នេះទាំងសងខាង ពេលប្រៀបធៀប m.text == BTN_XXX ដើម្បីកុំឲ្យ
+    button ដាច់ការងារពេលកំណត់ premium emoji ថ្មី។"""
+    if not text:
+        return text
+    glyph, icon_id = emoji_icon_for(text)
+    if glyph and icon_id:
+        return _strip_glyph(text, glyph)
+    return text
 
 
 def preply_btn(text, style=None, **kw):
@@ -620,7 +686,7 @@ def build_qr_image(qr_string, amount=None, ref=None, label=None, subtitle=None, 
             return None
 
 
-def poll_deposit(uid, chat_id, amount, reference, max_minutes=5):
+def poll_deposit(uid, chat_id, amount, reference, user_label=None, max_minutes=5):
     """Background thread ដើម្បី poll ការទូទាត់ រហូតដល់ PAID ឬ timeout។"""
     deadline = time.time() + max_minutes * 60
     while time.time() < deadline:
@@ -634,6 +700,11 @@ def poll_deposit(uid, chat_id, amount, reference, max_minutes=5):
                 )
             except Exception:
                 pass
+            notify_public(
+                f"💰 <b>Deposit ជោគជ័យ!</b>\n"
+                f"👤 {user_label or 'User'}\n"
+                f"💵 ${amount:.2f}"
+            )
             return
         time.sleep(8)
     try:
@@ -780,10 +851,18 @@ def reply_kb_for(uid):
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
     get_user(message.from_user.id)
+    first_name = message.from_user.first_name or "មិត្ត"
     text = (
-        "👋 សូមស្វាគមន៍មកកាន់ <b>Kairozen Premium Shop</b>!\n\n"
-        "🛒 ជ្រើសរើស account premium ដែលអ្នកចង់បាន ហើយទូទាត់ដោយ KHQR។\n"
-        "សូមប្រើប៊ូតុងខាងក្រោមដើម្បីចាប់ផ្តើម:"
+        f"👋 <b>សួស្តី {first_name}!</b>\n\n"
+        f"🏠 សូមស្វាគមន៍មកកាន់ <b>{STORE_NAME}</b> — កន្លែងទិញ account premium "
+        f"(ChatGPT, Netflix, Spotify, Canva...) ដោយសុវត្ថិភាព ភ្លាមៗ តាមរយៈ KHQR។\n\n"
+        f"👉 ប្រើប៊ូតុងខាងក្រោមដើម្បីចាប់ផ្តើម:\n"
+        f"🛒 <b>ទិញ Account</b> — មើលផលិតផលទាំងអស់ក្នុងស្តុក\n"
+        f"💰 <b>Wallet</b> — ពិនិត្យសមតុល្យ និងប្រវត្តិកម្មង់\n"
+        f"➕ <b>បញ្ចូលលុយ</b> — ដាក់លុយចូល Wallet ដោយ KHQR\n"
+        f"📦 <b>ការកម្មង់</b> — មើលការកម្មង់ចុងក្រោយរបស់អ្នក\n"
+        f"☎️ <b>ជួយខ្ញុំផង</b> — ទំនាក់ទំនង Admin ផ្ទាល់\n\n"
+        f"✨ ទិញរួច account ផ្ញើមកភ្លាមៗ! សូមរីករាយជាមួយ {STORE_NAME} 🙏"
     )
     # ផ្ញើសារតែមួយប៉ុណ្ណោះ (reply keyboard ភ្ជាប់ជាមួយសារនេះតែម្តង) — កុំឲ្យម៉ឺនុយបង្ហាញស្ទួនគ្នា ២ ដង
     bot.send_message(message.chat.id, text, reply_markup=reply_kb_for(message.from_user.id))
@@ -825,12 +904,12 @@ def cmd_orders(message):
 # ------------------------------------------------------------------
 # REPLY KEYBOARD TEXT HANDLERS
 # ------------------------------------------------------------------
-@bot.message_handler(func=lambda m: m.text == BTN_SHOP)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_SHOP))
 def reply_shop(message):
     bot.send_message(message.chat.id, "🛒 ជ្រើសរើស account ដែលអ្នកចង់ទិញ:", reply_markup=products_kb())
 
 
-@bot.message_handler(func=lambda m: m.text == BTN_WALLET)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_WALLET))
 def reply_wallet(message):
     u = get_user(message.from_user.id)
     bot.send_message(
@@ -839,12 +918,12 @@ def reply_wallet(message):
     )
 
 
-@bot.message_handler(func=lambda m: m.text == BTN_DEPOSIT)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_DEPOSIT))
 def reply_deposit(message):
     bot.send_message(message.chat.id, "សូមជ្រើសរើសចំនួនទឹកប្រាក់ដែលចង់បញ្ចូល (USD):", reply_markup=deposit_amount_kb())
 
 
-@bot.message_handler(func=lambda m: m.text == BTN_ORDERS)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_ORDERS))
 def reply_orders(message):
     orders = load_orders()
     mine = [o for o in orders if o["uid"] == message.from_user.id]
@@ -855,7 +934,7 @@ def reply_orders(message):
     bot.send_message(message.chat.id, "📦 ការកម្មង់ចុងក្រោយ:\n" + "\n".join(lines))
 
 
-@bot.message_handler(func=lambda m: m.text == BTN_HELP)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_HELP))
 def reply_help(message):
     bot.send_message(
         message.chat.id,
@@ -864,13 +943,13 @@ def reply_help(message):
     )
 
 
-@bot.message_handler(func=lambda m: m.text == ADMIN_BTN_STATS)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_STATS))
 def reply_admin_stats(message):
     if is_admin(message.from_user.id):
         cmd_stats(message)
 
 
-@bot.message_handler(func=lambda m: m.text == ADMIN_BTN_ADDPRODUCT)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_ADDPRODUCT))
 def reply_admin_addproduct(message):
     if is_admin(message.from_user.id):
         cmd_addproduct(message)
@@ -901,7 +980,7 @@ def admin_delete_confirm_kb(key):
     return kb
 
 
-@bot.message_handler(func=lambda m: m.text == ADMIN_BTN_ADDSTOCK)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_ADDSTOCK))
 def reply_admin_addstock(message):
     if not is_admin(message.from_user.id):
         return
@@ -912,7 +991,7 @@ def reply_admin_addstock(message):
     )
 
 
-@bot.message_handler(func=lambda m: m.text == ADMIN_BTN_DELPRODUCT)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_DELPRODUCT))
 def reply_admin_delproduct(message):
     if not is_admin(message.from_user.id):
         return
@@ -924,7 +1003,7 @@ def reply_admin_delproduct(message):
 
 
 
-@bot.message_handler(func=lambda m: m.text == ADMIN_BTN_EMOJI)
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_EMOJI))
 def reply_admin_emoji(message):
     if is_admin(message.from_user.id):
         cmd_setupemoji(message)
@@ -1160,8 +1239,13 @@ def handle_buy_wallet(call, product_key, qty=1):
         except Exception:
             pass
 
-
-def handle_buy_qr(call, product_key, qty=1):
+    # notify public channel/group (NOTIFY_CHAT_IDS)
+    notify_public(
+        f"🛍️ <b>ការកម្មង់ថ្មី!</b>\n"
+        f"{product.get('icon', '📦')} {product['name']} × {qty}\n"
+        f"💵 ${total_price:.2f}\n"
+        f"👤 {public_user_label(call.from_user)}"
+    )
     """ទិញ account ដោយទូទាត់ផ្ទាល់ KHQR — មិនចាំបាច់ដាក់លុយចូល Wallet ជាមុនទេ។
     ស្តុកនៅតែស្ថិតក្នុងឃ្លាំង (មិនកក់ទុក) រហូតដល់ payment ជោគជ័យទើប pop ចេញ ដើម្បីជៀសវាងលក់លើសស្តុក
     ក្នុងករណីមានអ្នកទិញច្រើននាក់ក្នុងពេលតែមួយ។"""
@@ -1217,13 +1301,13 @@ def handle_buy_qr(call, product_key, qty=1):
 
     t = threading.Thread(
         target=poll_purchase,
-        args=(uid, chat_id, product_key, product["name"], total_price, ref, qty),
+        args=(uid, chat_id, product_key, product["name"], total_price, ref, qty, public_user_label(call.from_user)),
         daemon=True,
     )
     t.start()
 
 
-def poll_purchase(uid, chat_id, product_key, product_name, price, reference, qty=1, max_minutes=5):
+def poll_purchase(uid, chat_id, product_key, product_name, price, reference, qty=1, user_label=None, max_minutes=5):
     """Background thread ដើម្បី poll ការទូទាត់ផ្ទាល់ (មិនកាត់ Wallet) រហូតដល់ PAID ឬ timeout។"""
     deadline = time.time() + max_minutes * 60
     while time.time() < deadline:
@@ -1292,6 +1376,13 @@ def poll_purchase(uid, chat_id, product_key, product_name, price, reference, qty
                         bot.send_message(ADMIN_ID, f"⚠️ ស្តុក {product_name} ជិតអស់! ({stock_count(product_key)} នៅសល់)")
                 except Exception:
                     pass
+
+            notify_public(
+                f"🛍️ <b>ការកម្មង់ថ្មី!</b> (KHQR ផ្ទាល់)\n"
+                f"{product_name} × {qty}\n"
+                f"💵 ${price:.2f}\n"
+                f"👤 {user_label or 'User'}"
+            )
             return
         time.sleep(8)
     try:
@@ -1338,7 +1429,7 @@ def handle_deposit(call, amount):
 
     t = threading.Thread(
         target=poll_deposit,
-        args=(uid, chat_id, amount, ref),
+        args=(uid, chat_id, amount, ref, public_user_label(call.from_user)),
         daemon=True,
     )
     t.start()
@@ -1665,7 +1756,7 @@ def start_keep_alive():
 
     @app.route("/")
     def home():
-        return "Kairozen Premium Shop Bot is running ✅"
+        return f"{STORE_NAME} Bot is running ✅"
 
     @app.route("/camrapid-webhook", methods=["POST", "GET"])
     def camrapid_webhook():
