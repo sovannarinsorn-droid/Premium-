@@ -97,21 +97,34 @@ def premium_text(text):
 
 
 def emoji_icon_for(text):
-    """រកមើលថាតើ text (ជាធម្មតាជា label ប៊ូតុង) មាន glyph ណាមួយដែលកំណត់ icon រួច — return custom_emoji_id ដំបូងដែលរកឃើញ"""
+    """រកមើលថាតើ text (ជាធម្មតាជា label ប៊ូតុង) មាន glyph ណាមួយដែលកំណត់ icon រួច
+    — return (glyph, custom_emoji_id) ដំបូងដែលរកឃើញ, ឬ (None, None) បើគ្មាន
+    ពិនិត្យគ្រប់ glyph ដែលបានកំណត់ទាំងអស់ (មិនកំណត់ត្រឹមតែ EMOJI_CATEGORIES ទេ —
+    ដូច្នេះ icon ផលិតផលនីមួយៗ ក៏អាចដាក់ premium emoji បានដែរ)"""
     m = get_emoji_map()
     if not m:
-        return None
-    for glyph, _label in EMOJI_CATEGORIES:
-        if glyph in text and glyph in m:
+        return None, None
+    # ត្រៀម glyph វែងបំផុតជាមុន ដើម្បីកុំឲ្យ glyph ខ្លីស៊ុតត្រូវនឹង substring របស់ glyph វែង
+    for glyph in sorted(m.keys(), key=len, reverse=True):
+        if glyph and glyph in text:
             icon_id = m[glyph].get("custom_emoji_id")
             if icon_id:
-                return icon_id
-    return None
+                return glyph, icon_id
+    return None, None
+
+
+def _strip_glyph(text, glyph):
+    """លុប glyph ធម្មតាចេញពី label (ព្រោះ icon premium បង្ហាញជំនួសរួចហើយ —
+    កុំឲ្យ emoji ចាស់លេចមកជាមួយ icon ថ្មីស្ទួនគ្នា)"""
+    cleaned = text.replace(glyph, "", 1)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def pbtn(text, callback_data=None, style=None, url=None, **kw):
-    """InlineKeyboardButton ជាមួយ icon premium (បើមាន) + style ពណ៌ (success/danger)"""
-    icon_id = emoji_icon_for(text)
+    """InlineKeyboardButton ជាមួយ icon premium (បើមាន) + style ពណ៌ (success/danger)
+    បើ icon premium ភ្ជាប់បានជោគជ័យ នឹងលុប glyph ធម្មតាចេញពី label ដើម្បីកុំឲ្យបង្ហាញស្ទួន"""
+    glyph, icon_id = emoji_icon_for(text)
+    clean_text = _strip_glyph(text, glyph) if glyph else text
     attempts = []
     if style and icon_id:
         attempts.append({"style": style, "icon_custom_emoji_id": icon_id})
@@ -119,21 +132,23 @@ def pbtn(text, callback_data=None, style=None, url=None, **kw):
         attempts.append({"icon_custom_emoji_id": icon_id})
     if style:
         attempts.append({"style": style})
-    attempts.append({})
     for extra in attempts:
+        use_text = clean_text if "icon_custom_emoji_id" in extra else text
         try:
-            return types.InlineKeyboardButton(text, callback_data=callback_data, url=url, **extra, **kw)
+            return types.InlineKeyboardButton(use_text, callback_data=callback_data, url=url, **extra, **kw)
         except TypeError:
             continue
     return types.InlineKeyboardButton(text, callback_data=callback_data, url=url, **kw)
 
 
 def preply_btn(text, **kw):
-    """KeyboardButton (reply keyboard) ជាមួយ icon premium (បើមាន)"""
-    icon_id = emoji_icon_for(text)
+    """KeyboardButton (reply keyboard) ជាមួយ icon premium (បើមាន)
+    បើ icon premium ភ្ជាប់បានជោគជ័យ នឹងលុប glyph ធម្មតាចេញពី label ដើម្បីកុំឲ្យបង្ហាញស្ទួន"""
+    glyph, icon_id = emoji_icon_for(text)
     if icon_id:
+        clean_text = _strip_glyph(text, glyph)
         try:
-            return types.KeyboardButton(text, icon_custom_emoji_id=icon_id, **kw)
+            return types.KeyboardButton(clean_text, icon_custom_emoji_id=icon_id, **kw)
         except TypeError:
             pass
     return types.KeyboardButton(text, **kw)
@@ -567,12 +582,12 @@ def poll_deposit(uid, chat_id, amount, reference, max_minutes=5):
 def main_menu_kb():
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("🛒 ទិញ Account", callback_data="menu_shop"),
-        types.InlineKeyboardButton("💰 Wallet", callback_data="menu_wallet"),
+        pbtn("🛒 ទិញ Account", callback_data="menu_shop"),
+        pbtn("💰 Wallet", callback_data="menu_wallet"),
     )
     kb.add(
-        types.InlineKeyboardButton("📦 ការកម្មង់របស់ខ្ញុំ", callback_data="menu_orders"),
-        types.InlineKeyboardButton("☎️ ទំនាក់ទំនង Admin", url="tg://user?id=%d" % ADMIN_ID),
+        pbtn("📦 ការកម្មង់របស់ខ្ញុំ", callback_data="menu_orders"),
+        pbtn("☎️ ទំនាក់ទំនង Admin", url="tg://user?id=%d" % ADMIN_ID),
     )
     return kb
 
@@ -596,20 +611,30 @@ def products_kb():
         icon = p.get("icon", "📦")
         if left > 0:
             label = f"{icon} {p['name'].upper()} - ${p['price']:.2f}"
-            btn = safe_button(label, f"buy_{key}", style="success")
+            btn = pbtn(label, callback_data=f"buyopt_{key}", style="success")
         else:
             label = f"× {icon} {p['name'].upper()} - អស់ស្តុក"
-            btn = safe_button(label, f"nostock_{key}", style="danger")
+            btn = pbtn(label, callback_data=f"nostock_{key}", style="danger")
         kb.add(btn)
-    kb.add(types.InlineKeyboardButton("🔙 ត្រឡប់ក្រោយ", callback_data="back_main"))
+    kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="back_main"))
+    return kb
+
+
+def buy_confirm_kb(key, price):
+    """ជ្រើសរើសវិធីទូទាត់: ពី Wallet ឬ ទូទាត់ផ្ទាល់ KHQR (មិនចាំបាច់ដាក់លុយចូល Wallet)"""
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(pbtn(f"💰 ទូទាត់ពី Wallet (${price:.2f})", callback_data=f"buywallet_{key}"))
+    kb.add(pbtn("⚡ ទូទាត់ផ្ទាល់ KHQR (មិនចាំបាច់ Wallet)", callback_data=f"buyqr_{key}"))
+    kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="menu_shop"))
     return kb
 
 
 def deposit_amount_kb():
     kb = types.InlineKeyboardMarkup(row_width=3)
-    amounts = [2, 5, 10, 20, 50]
+    # 6 ចំនួន (3x2 grid ពេញ) ដើម្បីកុំឲ្យមានជួរខ្វះ/កន្លែងទទេនៅជួរចុងក្រោយ
+    amounts = [2, 5, 10, 20, 50, 100]
     kb.add(*[types.InlineKeyboardButton(f"${a}", callback_data=f"dep_{a}") for a in amounts])
-    kb.add(types.InlineKeyboardButton("🔙 ត្រឡប់ក្រោយ", callback_data="back_main"))
+    kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="back_main"))
     return kb
 
 
@@ -658,10 +683,8 @@ def cmd_start(message):
         "🛒 ជ្រើសរើស account premium ដែលអ្នកចង់បាន ហើយទូទាត់ដោយ KHQR។\n"
         "សូមប្រើប៊ូតុងខាងក្រោមដើម្បីចាប់ផ្តើម:"
     )
-    # ផ្ញើ reply keyboard (ប៊ូតុងខាងក្រោមអេក្រង់) ជាមុនសិន
-    bot.send_message(message.chat.id, "🏠 ម៉ឺនុយសំខាន់ៗនៅខាងក្រោម 👇", reply_markup=reply_kb_for(message.from_user.id))
-    # បន្ទាប់មកផ្ញើ inline keyboard សម្រាប់សកម្មភាពលម្អិត
-    bot.send_message(message.chat.id, text, reply_markup=main_menu_kb())
+    # ផ្ញើសារតែមួយប៉ុណ្ណោះ (reply keyboard ភ្ជាប់ជាមួយសារនេះតែម្តង) — កុំឲ្យម៉ឺនុយបង្ហាញស្ទួនគ្នា ២ ដង
+    bot.send_message(message.chat.id, text, reply_markup=reply_kb_for(message.from_user.id))
 
 
 @bot.message_handler(commands=["wallet"])
@@ -802,9 +825,17 @@ def callback_router(call):
             "🏠 ម៉ឺនុយចម្បង:", chat_id, call.message.message_id, reply_markup=main_menu_kb(),
         )
 
-    elif data.startswith("buy_"):
+    elif data.startswith("buyopt_"):
         product_key = data.split("_", 1)[1]
-        handle_buy(call, product_key)
+        show_buy_options(call, product_key)
+
+    elif data.startswith("buywallet_"):
+        product_key = data.split("_", 1)[1]
+        handle_buy_wallet(call, product_key)
+
+    elif data.startswith("buyqr_"):
+        product_key = data.split("_", 1)[1]
+        handle_buy_qr(call, product_key)
 
     elif data.startswith("nostock_"):
         product_key = data.split("_", 1)[1]
@@ -820,7 +851,27 @@ def callback_router(call):
     bot.answer_callback_query(call.id)
 
 
-def handle_buy(call, product_key):
+def show_buy_options(call, product_key):
+    chat_id = call.message.chat.id
+    products = load_products()
+    if product_key not in products:
+        bot.answer_callback_query(call.id, "❌ Product មិនត្រឹមត្រូវ", show_alert=True)
+        return
+    p = products[product_key]
+    if stock_count(product_key) <= 0:
+        bot.answer_callback_query(call.id, f"❌ {p['name']} អស់ស្តុកហើយ សូមទាក់ទង Admin", show_alert=True)
+        return
+    icon = p.get("icon", "📦")
+    bot.edit_message_text(
+        f"{icon} <b>{p['name']}</b>\n💵 តម្លៃ: ${p['price']:.2f}\n\n"
+        f"ជ្រើសរើសវិធីទូទាត់:\n"
+        f"💰 Wallet — កាត់ពីសមតុល្យ (ត្រូវការដាក់លុយចូលមុន)\n"
+        f"⚡ KHQR ផ្ទាល់ — ស្កេនទូទាត់ភ្លាមៗ គ្មានចាំបាច់ដាក់លុយចូល Wallet ទេ",
+        chat_id, call.message.message_id, reply_markup=buy_confirm_kb(product_key, p["price"]),
+    )
+
+
+def handle_buy_wallet(call, product_key):
     uid = call.from_user.id
     chat_id = call.message.chat.id
     products = load_products()
@@ -883,6 +934,136 @@ def handle_buy(call, product_key):
                 bot.send_message(ADMIN_ID, f"⚠️ ស្តុក {product['name']} ជិតអស់! ({stock_count(product_key)} នៅសល់)")
         except Exception:
             pass
+
+
+def handle_buy_qr(call, product_key):
+    """ទិញ account ដោយទូទាត់ផ្ទាល់ KHQR — មិនចាំបាច់ដាក់លុយចូល Wallet ជាមុនទេ។
+    ស្តុកនៅតែស្ថិតក្នុងឃ្លាំង (មិនកក់ទុក) រហូតដល់ payment ជោគជ័យទើប pop ចេញ ដើម្បីជៀសវាងលក់លើសស្តុក
+    ក្នុងករណីមានអ្នកទិញច្រើននាក់ក្នុងពេលតែមួយ។"""
+    uid = call.from_user.id
+    chat_id = call.message.chat.id
+    products = load_products()
+    if product_key not in products:
+        bot.answer_callback_query(call.id, "❌ Product មិនត្រឹមត្រូវ", show_alert=True)
+        return
+
+    product = products[product_key]
+    price = product["price"]
+
+    if stock_count(product_key) <= 0:
+        bot.answer_callback_query(call.id, "❌ ស្តុកអស់ហើយ សូមទាក់ទង Admin", show_alert=True)
+        return
+
+    ref = f"KZBUY{uid}{int(time.time())}"[:50]
+    ref_disp = f"BUY-{hashlib.md5(ref.encode()).hexdigest()[:8].upper()}"
+
+    resp = camrapid_create(price, ref)
+    if not resp:
+        bot.answer_callback_query(call.id, "❌ មិនអាចបង្កើត QR បានទេ សូមព្យាយាមម្តងទៀត", show_alert=True)
+        return
+
+    qr_string = resp.get("qr_code", "")
+    icon = product.get("icon", "📦")
+    img_buf = build_qr_image(
+        qr_string, amount=price, ref=ref_disp,
+        label=product["name"], subtitle=f"{STORE_NAME} · ទិញផ្ទាល់",
+    ) if qr_string else None
+
+    caption = (
+        f"{icon} <b>{product['name']}</b>\n💵 <b>${price:.2f}</b>\n🔖 <code>{ref_disp}</code>\n\n"
+        f"📱 ស្កេន KHQR ខាងក្រោមដើម្បីទូទាត់ភ្លាមៗ (មិនចាំបាច់ដាក់លុយចូល Wallet ទេ)\n"
+        f"✅ ទូទាត់រួច account នឹងផ្ញើមកអោយភ្លាមៗ\n⏳ QR ផុតកំណត់ក្នុង ~5 នាទី"
+    )
+
+    if img_buf:
+        bot.send_photo(chat_id, img_buf, caption=caption)
+    elif qr_string:
+        qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=350x350&data={qr_string}"
+        bot.send_photo(chat_id, qr_url, caption=caption)
+    else:
+        bot.answer_callback_query(call.id, "❌ QR string ទទេ សូមព្យាយាមម្តងទៀត", show_alert=True)
+        return
+
+    t = threading.Thread(
+        target=poll_purchase,
+        args=(uid, chat_id, product_key, product["name"], price, ref),
+        daemon=True,
+    )
+    t.start()
+
+
+def poll_purchase(uid, chat_id, product_key, product_name, price, reference, max_minutes=5):
+    """Background thread ដើម្បី poll ការទូទាត់ផ្ទាល់ (មិនកាត់ Wallet) រហូតដល់ PAID ឬ timeout។"""
+    deadline = time.time() + max_minutes * 60
+    while time.time() < deadline:
+        if camrapid_check(reference):
+            item = pop_stock_item(product_key)
+            if not item:
+                # ស្តុកអស់ត្រឹមតែមុនពេលទូទាត់ចប់បន្តិច — admin ត្រូវសង​ប្រាក់ ឬបន្ថែម stock ដោយដៃ
+                try:
+                    bot.send_message(
+                        chat_id,
+                        f"⚠️ ទូទាត់ជោគជ័យសម្រាប់ <b>{product_name}</b> (${price:.2f}) ប៉ុន្តែស្តុកអស់ភ្លាមៗ។\n"
+                        f"សូមទាក់ទង Admin ដើម្បីទទួល account ឬសង​ប្រាក់វិញ។ 🔖 Ref: {reference}",
+                    )
+                except Exception:
+                    pass
+                if ADMIN_ID:
+                    try:
+                        bot.send_message(
+                            ADMIN_ID,
+                            f"🚨 URGENT: user {uid} ទូទាត់ {product_name} (${price:.2f}) ជោគជ័យ ប៉ុន្តែស្តុកអស់!\n"
+                            f"សូម refund ឬបន្ថែម stock ដោយដៃ។ 🔖 Ref: {reference}",
+                        )
+                    except Exception:
+                        pass
+                return
+
+            orders = load_orders()
+            orders.append({
+                "uid": uid,
+                "product": product_name,
+                "price": price,
+                "time": time.strftime("%Y-%m-%d %H:%M"),
+                "method": "khqr_direct",
+            })
+            save_orders(orders)
+
+            users = load_users()
+            uid_str = str(uid)
+            if uid_str not in users:
+                users[uid_str] = {"balance": 0.0, "orders": 0}
+            users[uid_str]["orders"] = users[uid_str].get("orders", 0) + 1
+            save_users(users)
+
+            try:
+                bot.send_message(
+                    chat_id,
+                    f"✅ ការទិញជោគជ័យ! (ទូទាត់ផ្ទាល់ KHQR)\n\n"
+                    f"🛍️ Product: <b>{product_name}</b>\n"
+                    f"💵 តម្លៃ: ${price:.2f}\n\n"
+                    f"🔑 <b>Account របស់អ្នក:</b>\n<code>{item}</code>",
+                )
+            except Exception:
+                pass
+
+            if ADMIN_ID:
+                try:
+                    bot.send_message(
+                        ADMIN_ID,
+                        f"🔔 លក់ថ្មី (KHQR ផ្ទាល់): {product_name} (${price:.2f}) ដល់ user {uid}\n"
+                        f"ស្តុកនៅសល់: {stock_count(product_key)}",
+                    )
+                    if stock_count(product_key) <= 2:
+                        bot.send_message(ADMIN_ID, f"⚠️ ស្តុក {product_name} ជិតអស់! ({stock_count(product_key)} នៅសល់)")
+                except Exception:
+                    pass
+            return
+        time.sleep(8)
+    try:
+        bot.send_message(chat_id, "⌛ QR ផុតកំណត់ ឬមិនទាន់ទូទាត់។ សូមព្យាយាមទិញម្តងទៀត។")
+    except Exception:
+        pass
 
 
 def handle_deposit(call, amount):
@@ -1043,13 +1224,35 @@ def process_addstock(message, key):
                            f"ស្តុករួម: {stock_count(key)}")
 
 
+def all_emoji_categories():
+    """បញ្ជីពេញលេញសម្រាប់ setup: category base (✅❌🔙...) បូក icon របស់ផលិតផលនីមួយៗ
+    ដែលមានក្នុងហាង — ដូច្នេះ admin អាចដាក់ Premium Emoji ទៅ icon ផលិតផលនីមួយៗបានដែរ
+    (ដូចឧទាហរណ៍ shop ដទៃ ដែល icon ក្នុង inline keyboard ជា premium emoji ស្អាតៗ)"""
+    cats = list(EMOJI_CATEGORIES)
+    seen = {g for g, _ in cats}
+    for key, p in load_products().items():
+        icon = p.get("icon", "📦")
+        if icon and icon not in seen:
+            cats.append((icon, f"{icon} Icon ផលិតផល: {p.get('name', key)}"))
+            seen.add(icon)
+    return cats
+
+
+def _encode_glyph(glyph):
+    return glyph.encode("utf-8").hex()
+
+
+def _decode_glyph(hex_str):
+    return bytes.fromhex(hex_str).decode("utf-8")
+
+
 def emoji_setup_kb():
     m = get_emoji_map()
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for idx, (glyph, label) in enumerate(EMOJI_CATEGORIES):
+    for glyph, label in all_emoji_categories():
         mark = "✅" if glyph in m else "⬜"
-        kb.add(types.InlineKeyboardButton(f"{mark} {label}", callback_data=f"emoji_pick_{idx}"))
-    kb.add(types.InlineKeyboardButton("🔙 ត្រឡប់ក្រោយ", callback_data="emoji_close"))
+        kb.add(types.InlineKeyboardButton(f"{mark} {label}", callback_data=f"emoji_pick_{_encode_glyph(glyph)}"))
+    kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="emoji_close"))
     return kb
 
 
@@ -1060,8 +1263,9 @@ def cmd_setupemoji(message):
     bot.send_message(
         message.chat.id,
         "🎭 <b>Setup Premium Emoji</b>\n\n"
-        "ជ្រើសរើសប្រភេទខាងក្រោម រួចផ្ញើ Premium Emoji ពិត (ត្រូវការ Telegram Premium)\n"
-        "ដើម្បីភ្ជាប់ icon នោះទៅគ្រប់ប៊ូតុង/សារដែលមាន glyph ធម្មតានេះ:",
+        "ជ្រើសរើសប្រភេទខាងក្រោម (រួមទាំង icon ផលិតផលនីមួយៗ) រួចផ្ញើ Premium Emoji ពិត "
+        "(ត្រូវការ Telegram Premium)\nដើម្បីភ្ជាប់ icon នោះទៅគ្រប់ប៊ូតុង/សារដែលមាន glyph ធម្មតានេះ "
+        "— ស្តុកមានទើបប៊ូតុងបង្ហាញ icon premium ដូចក្នុងឧទាហរណ៍:",
         reply_markup=emoji_setup_kb(),
     )
 
@@ -1078,18 +1282,18 @@ def emoji_setup_callback(call):
         bot.edit_message_text("🎭 បិទ Setup Emoji។ ប្រើ /setupemoji ម្តងទៀតបើត្រូវការ។", chat_id, call.message.message_id)
 
     elif data.startswith("emoji_pick_"):
-        idx = int(data.split("_")[-1])
-        glyph, label = EMOJI_CATEGORIES[idx]
+        glyph = _decode_glyph(data[len("emoji_pick_"):])
+        label = next((l for g, l in all_emoji_categories() if g == glyph), f"Icon {glyph}")
         msg = bot.send_message(
             chat_id,
             f"📨 សូមផ្ញើ <b>Premium Emoji ពិត</b> សម្រាប់ប្រភេទ:\n{label}\n\n"
             f"(ត្រូវជា custom emoji ពិតៗ ដែលអ្នកមាន Telegram Premium ចុចផ្ញើ មិនមែន emoji ធម្មតាទេ)",
         )
-        bot.register_next_step_handler(msg, emoji_capture_step, idx)
+        bot.register_next_step_handler(msg, emoji_capture_step, glyph, label)
 
     elif data.startswith("emoji_clear_"):
-        idx = int(data.split("_")[-1])
-        glyph, label = EMOJI_CATEGORIES[idx]
+        glyph = _decode_glyph(data[len("emoji_clear_"):])
+        label = next((l for g, l in all_emoji_categories() if g == glyph), f"Icon {glyph}")
         m = get_emoji_map()
         m.pop(glyph, None)
         save_emoji_map(m)
@@ -1101,16 +1305,15 @@ def emoji_setup_callback(call):
     bot.answer_callback_query(call.id)
 
 
-def emoji_capture_step(message, idx):
+def emoji_capture_step(message, glyph, label):
     if not is_admin(message.from_user.id):
         return
-    glyph, label = EMOJI_CATEGORIES[idx]
     entities = message.entities or []
     ce = next((e for e in entities if e.type == "custom_emoji"), None)
     if not ce:
         kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🔁 ព្យាយាមម្តងទៀត", callback_data=f"emoji_pick_{idx}"))
-        kb.add(types.InlineKeyboardButton("🔙 ត្រឡប់ក្រោយ", callback_data="emoji_close"))
+        kb.add(pbtn("🔁 ព្យាយាមម្តងទៀត", callback_data=f"emoji_pick_{_encode_glyph(glyph)}"))
+        kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="emoji_close"))
         bot.send_message(
             message.chat.id,
             "❌ រកមិនឃើញ Premium Emoji ក្នុងសារនេះទេ។\nសូមផ្ញើ Premium Emoji ពិត (មិនមែន emoji ធម្មតា) ម្តងទៀត:",
@@ -1124,7 +1327,8 @@ def emoji_capture_step(message, idx):
     bot.send_message(
         message.chat.id,
         f"✅ <b>{label}</b>\n\nបានភ្ជាប់ Premium Emoji {emoji_char} ទៅ glyph <code>{glyph}</code> រួចហើយ។\n"
-        f"ចាប់ពីនេះទៅ គ្រប់ប៊ូតុង/សារណាដែលមាន {glyph} នឹងបង្ហាញ icon premium ថែមទៀត។",
+        f"ចាប់ពីនេះទៅ គ្រប់ប៊ូតុង/សារណាដែលមាន {glyph} នឹងបង្ហាញ icon premium ថែមទៀត "
+        f"(ឧ. ប៊ូតុងផលិតផលក្នុង 🛒 ទិញ Account ពេលមានស្តុក)។",
         reply_markup=emoji_setup_kb(),
     )
 
