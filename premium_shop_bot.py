@@ -306,8 +306,16 @@ _http.mount("https://", requests.adapters.HTTPAdapter(
 ))
 
 
+_last_camrapid_error = ""  # debug: raw error/response ចុងក្រោយ ដើម្បីបង្ហាញអោយ admin ដោយមិនចាំបាច់មើល Render logs
+
+
 def camrapid_create(amount, reference):
     """POST ទៅ CamRapidPay ដើម្បីបង្កើត KHQR → return dict ឬ None"""
+    global _last_camrapid_error
+    if not CAMRAPIDPAY_API_KEY:
+        _last_camrapid_error = "CAMRAPIDPAY_API_KEY មិនបានកំណត់ក្នុង Render environment variables"
+        print(f"[camrapid_create] {_last_camrapid_error}", flush=True)
+        return None
     try:
         r = _http.post(
             CAMRAPID_CREATE,
@@ -319,12 +327,19 @@ def camrapid_create(amount, reference):
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             timeout=15,
         )
-        data = r.json()
+        try:
+            data = r.json()
+        except Exception:
+            _last_camrapid_error = f"HTTP {r.status_code} (non-JSON): {r.text[:300]}"
+            print(f"[camrapid_create] {_last_camrapid_error}", flush=True)
+            return None
         if data.get("success"):
             return data  # keys: qr_code, payment_url, amount, expires_in
-        print(f"[camrapid_create] failed: {data}")
+        _last_camrapid_error = f"HTTP {r.status_code}: {data}"
+        print(f"[camrapid_create] failed: {_last_camrapid_error}", flush=True)
     except Exception as e:
-        print(f"[camrapid_create] error: {e}")
+        _last_camrapid_error = f"{type(e).__name__}: {e}"
+        print(f"[camrapid_create] error: {_last_camrapid_error}", flush=True)
     return None
 
 
@@ -648,6 +663,7 @@ BTN_HELP = "☎️ ជួយខ្ញុំផង"
 ADMIN_BTN_STATS = "📊 ស្ថិតិ"
 ADMIN_BTN_ADDPRODUCT = "➕ Product ថ្មី"
 ADMIN_BTN_ADDSTOCK = "📥 Stock ថ្មី"
+ADMIN_BTN_DELPRODUCT = "🗑 លុប Product"
 ADMIN_BTN_EMOJI = "🎭 Setup Emoji"
 
 
@@ -664,7 +680,8 @@ def admin_reply_kb():
     kb.add(preply_btn(BTN_SHOP), preply_btn(BTN_WALLET))
     kb.add(preply_btn(BTN_DEPOSIT), preply_btn(BTN_ORDERS))
     kb.add(preply_btn(ADMIN_BTN_STATS), preply_btn(ADMIN_BTN_ADDPRODUCT))
-    kb.add(preply_btn(ADMIN_BTN_ADDSTOCK), preply_btn(ADMIN_BTN_EMOJI))
+    kb.add(preply_btn(ADMIN_BTN_ADDSTOCK), preply_btn(ADMIN_BTN_DELPRODUCT))
+    kb.add(preply_btn(ADMIN_BTN_EMOJI))
     return kb
 
 
@@ -774,10 +791,52 @@ def reply_admin_addproduct(message):
         cmd_addproduct(message)
 
 
+def admin_product_pick_kb(prefix, empty_stock_only=False):
+    """Inline keyboard ជ្រើសរើស product មួយ សម្រាប់ admin action (add stock / delete)។
+    prefix: ដូចជា 'admaddstock' ឬ 'admdel' → callback_data = f'{prefix}_{key}'"""
+    products = load_products()
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for key, p in products.items():
+        icon = p.get("icon", "📦")
+        left = stock_count(key)
+        label = f"{icon} {p['name']} ({left} នៅសល់)"
+        kb.add(pbtn(label, callback_data=f"{prefix}_{key}"))
+    if not products:
+        kb.add(pbtn("(មិនទាន់មាន product ណាមួយ)", callback_data="noop"))
+    kb.add(pbtn("🔙 បោះបង់", callback_data="admcancel"))
+    return kb
+
+
+def admin_delete_confirm_kb(key):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        pbtn("✅ បាទ/ចាស លុប", callback_data=f"admdelyes_{key}", style="danger"),
+        pbtn("🔙 បោះបង់", callback_data="admcancel"),
+    )
+    return kb
+
+
 @bot.message_handler(func=lambda m: m.text == ADMIN_BTN_ADDSTOCK)
 def reply_admin_addstock(message):
-    if is_admin(message.from_user.id):
-        bot.send_message(message.chat.id, "សូមវាយបញ្ជា:\n<code>/addstock key</code>\nឧ. <code>/addstock netflix</code>")
+    if not is_admin(message.from_user.id):
+        return
+    bot.send_message(
+        message.chat.id,
+        "📥 <b>Stock ថ្មី</b>\n\nជ្រើសរើស product ដែលចង់បញ្ចូល stock:",
+        reply_markup=admin_product_pick_kb("admaddstock"),
+    )
+
+
+@bot.message_handler(func=lambda m: m.text == ADMIN_BTN_DELPRODUCT)
+def reply_admin_delproduct(message):
+    if not is_admin(message.from_user.id):
+        return
+    bot.send_message(
+        message.chat.id,
+        "🗑 <b>លុប Product</b>\n\nជ្រើសរើស product ដែលចង់លុប (នឹងលុបទាំង stock ដែលនៅសល់ផងដែរ):",
+        reply_markup=admin_product_pick_kb("admdel"),
+    )
+
 
 
 @bot.message_handler(func=lambda m: m.text == ADMIN_BTN_EMOJI)
@@ -847,6 +906,63 @@ def callback_router(call):
     elif data.startswith("dep_"):
         amount = float(data.split("_", 1)[1])
         handle_deposit(call, amount)
+
+    elif data == "admcancel":
+        bot.edit_message_text("🚫 បានបោះបង់។", chat_id, call.message.message_id)
+
+    elif data == "noop":
+        pass
+
+    elif data.startswith("admaddstock_"):
+        if not is_admin(uid):
+            return
+        key = data.split("_", 1)[1]
+        products = load_products()
+        if key not in products:
+            bot.answer_callback_query(call.id, "❌ Product មិនត្រឹមត្រូវ", show_alert=True)
+            return
+        bot.edit_message_text(
+            f"📥 សូមផ្ញើ account list សំរាប់ '{products[key]['name']}'\n(មួយបន្ទាត់ = account មួយ)",
+            chat_id, call.message.message_id,
+        )
+        bot.register_next_step_handler(call.message, process_addstock, key)
+
+    elif data.startswith("admdelyes_"):
+        if not is_admin(uid):
+            return
+        key = data.split("_", 1)[1]
+        products = load_products()
+        if key not in products:
+            bot.answer_callback_query(call.id, "❌ Product មិនត្រឹមត្រូវ", show_alert=True)
+            return
+        name = products[key]["name"]
+        left = stock_count(key)
+        del products[key]
+        save_products(products)
+        sp = stock_path(key)
+        if os.path.exists(sp):
+            os.remove(sp)
+        bot.edit_message_text(
+            f"✅ បានលុប product '{name}' (key: <code>{key}</code>) រួចហើយ\n"
+            f"🗑 Stock ដែលបានលុបទាំង {left} account",
+            chat_id, call.message.message_id,
+        )
+
+    elif data.startswith("admdel_"):
+        if not is_admin(uid):
+            return
+        key = data.split("_", 1)[1]
+        products = load_products()
+        if key not in products:
+            bot.answer_callback_query(call.id, "❌ Product មិនត្រឹមត្រូវ", show_alert=True)
+            return
+        p = products[key]
+        bot.edit_message_text(
+            f"⚠️ តើអ្នកប្រាកដថាចង់លុប <b>{p.get('icon','📦')} {p['name']}</b> (key: <code>{key}</code>)?\n"
+            f"ស្តុកនៅសល់ {stock_count(key)} account នឹងត្រូវលុបចោលផងដែរ។",
+            chat_id, call.message.message_id,
+            reply_markup=admin_delete_confirm_kb(key),
+        )
 
     bot.answer_callback_query(call.id)
 
@@ -959,7 +1075,11 @@ def handle_buy_qr(call, product_key):
 
     resp = camrapid_create(price, ref)
     if not resp:
-        bot.answer_callback_query(call.id, "❌ មិនអាចបង្កើត QR បានទេ សូមព្យាយាមម្តងទៀត", show_alert=True)
+        bot.answer_callback_query(
+            call.id,
+            f"❌ មិនអាចបង្កើត QR បានទេ\n\nមូលហេតុ:\n{_last_camrapid_error[:180]}",
+            show_alert=True,
+        )
         return
 
     qr_string = resp.get("qr_code", "")
@@ -1074,7 +1194,11 @@ def handle_deposit(call, amount):
 
     resp = camrapid_create(amount, ref)
     if not resp:
-        bot.answer_callback_query(call.id, "❌ មិនអាចបង្កើត QR បានទេ សូមព្យាយាមម្តងទៀត", show_alert=True)
+        bot.answer_callback_query(
+            call.id,
+            f"❌ មិនអាចបង្កើត QR បានទេ\n\nមូលហេតុ:\n{_last_camrapid_error[:180]}",
+            show_alert=True,
+        )
         return
 
     qr_string = resp.get("qr_code", "")
@@ -1192,7 +1316,7 @@ def addproduct_step_icon(message, key, name, price):
         f"{icon} {name}\n"
         f"🔑 key: <code>{key}</code>\n"
         f"💵 តម្លៃ: ${price:.2f}\n\n"
-        f"👉 ឥឡូវប្រើ <code>/addstock {key}</code> ដើម្បីបញ្ចូល account ចូល stock",
+        f"👉 ឥឡូវចុចប៊ូតុង 📥 Stock ថ្មី ដើម្បីបញ្ចូល account ចូល stock",
     )
 
 
