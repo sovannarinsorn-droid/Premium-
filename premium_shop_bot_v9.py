@@ -393,22 +393,6 @@ def stock_count(product_key):
         return len([l for l in f if l.strip()])
 
 
-def sold_count(product_key):
-    """ចំនួន account ដែលលក់រួច (សរុប) សម្រាប់ product មួយ — អានចេញពី field 'sold'
-    ដែលកើនឡើងរាល់ពេលទិញជោគជ័យ (មើល handle_buy_wallet)។"""
-    p = load_products().get(product_key, {})
-    return p.get("sold", 0)
-
-
-def bump_sold_count(product_key, qty):
-    """បន្ថែម qty ទៅ 'sold' counter របស់ product (ហៅរាល់ពេលទិញជោគជ័យ)"""
-    with _lock:
-        products = load_products()
-        if product_key in products:
-            products[product_key]["sold"] = products[product_key].get("sold", 0) + qty
-            save_products(products)
-
-
 def pop_stock_item(product_key):
     """យក account មួយចេញពី stock (FIFO), atomic-ish with lock."""
     with _lock:
@@ -803,12 +787,11 @@ def products_kb():
     for key, p in products.items():
         left = stock_count(key)
         icon = p.get("icon", "📦")
-        sold = sold_count(key)
         if left > 0:
-            label = f"{icon} {p['name'].upper()} - ${p['price']:.2f} (លក់ {sold})"
+            label = f"{icon} {p['name'].upper()} - ${p['price']:.2f}"
             btn = pbtn(label, callback_data=f"buyopt_{key}", style="success")
         else:
-            label = f"× {icon} {p['name'].upper()} - អស់ស្តុក (លក់ {sold})"
+            label = f"× {icon} {p['name'].upper()} - អស់ស្តុក"
             btn = pbtn(label, callback_data=f"nostock_{key}", style="danger")
         kb.add(btn)
     kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="back_main"))
@@ -841,8 +824,9 @@ def show_qty_picker(call, product_key, qty):
         return
     qty = max(1, min(qty, max_qty))
     icon = p.get("icon", "📦")
+    sold = p.get("sold", 0)
     bot.edit_message_text(
-        f"{icon} <b>{p['name']}</b>\n💵 តម្លៃឯកតា: ${p['price']:.2f}\n📦 ស្តុកនៅសល់: {max_qty}\n\n"
+        f"{icon} <b>{p['name']}</b>\n💵 តម្លៃឯកតា: ${p['price']:.2f}\n📦 ស្តុកនៅសល់: {max_qty}\n📈 លក់រួច: {sold} accounts\n\n"
         f"សូមជ្រើសរើសចំនួនដែលចង់ទិញ:",
         chat_id, call.message.message_id, reply_markup=qty_pick_kb(product_key, qty, max_qty, p["price"]),
     )
@@ -1038,7 +1022,7 @@ def admin_product_pick_kb(prefix, empty_stock_only=False):
     for key, p in products.items():
         icon = p.get("icon", "📦")
         left = stock_count(key)
-        sold = sold_count(key)
+        sold = p.get("sold", 0)
         label = f"{icon} {p['name']} ({left} នៅសល់ / លក់ {sold})"
         kb.add(pbtn(label, callback_data=f"{prefix}_{key}"))
     if not products:
@@ -1474,10 +1458,13 @@ def handle_buy_wallet(call, product_key, qty=1):
     })
     save_orders(orders)
 
+    # ធ្វើបច្ចុប្បន្នភាព "sold" (ចំនួនលក់រួច) សម្រាប់ product នេះ
+    products[product_key]["sold"] = products[product_key].get("sold", 0) + qty
+    save_products(products)
+
     users = load_users()
     users[str(uid)]["orders"] = users[str(uid)].get("orders", 0) + qty
     save_users(users)
-    bump_sold_count(product_key, qty)
 
     accounts_text = "\n".join(f"{i+1}. <code>{html.escape(it)}</code>" for i, it in enumerate(items))
     bot.send_message(
@@ -1838,7 +1825,7 @@ def cmd_stats(message):
         "📦 ស្តុកបច្ចុប្បន្ន:",
     ]
     for key, p in products.items():
-        lines.append(f"  • {p['name']}: {stock_count(key)} នៅសល់ | លក់រួច {sold_count(key)} accounts")
+        lines.append(f"  • {p['name']}: {stock_count(key)} នៅសល់ / លក់រួច {p.get('sold', 0)} accounts")
     bot.reply_to(message, "\n".join(lines))
 
 
