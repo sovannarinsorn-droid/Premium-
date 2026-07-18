@@ -59,6 +59,11 @@ NOTIFY_CHAT_IDS = [
 # នេះជាផ្លូវការសម្រាប់ disk (mount /data ផ្ទាល់ធ្លាប់ជួប PermissionError លើ Render)។
 # អាចប្តូរ path តាមចិត្តតាម env var DATA_DIR បើចង់ mount ត្រង់ផ្សេង។
 DATA_DIR = os.environ.get("DATA_DIR", "/var/data")
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except PermissionError:
+    # គ្មាន persistent disk mount នៅ /var/data ទេ → fallback ទៅ local dir (data នឹងបាត់ពេល redeploy)
+    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 STOCK_DIR = os.path.join(DATA_DIR, "stock")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 PRODUCTS_FILE = os.path.join(DATA_DIR, "products.json")
@@ -268,6 +273,8 @@ _orig_send_message = bot.send_message
 _orig_reply_to = bot.reply_to
 _orig_edit_message_text = bot.edit_message_text
 _orig_send_photo = bot.send_photo
+_orig_send_video = bot.send_video
+_orig_send_document = bot.send_document
 
 
 def _patched_send_message(chat_id, text=None, *args, **kwargs):
@@ -286,10 +293,20 @@ def _patched_send_photo(chat_id, photo, caption=None, *args, **kwargs):
     return _orig_send_photo(chat_id, photo, premium_text(caption), *args, **kwargs)
 
 
+def _patched_send_video(chat_id, video, caption=None, *args, **kwargs):
+    return _orig_send_video(chat_id, video, premium_text(caption), *args, **kwargs)
+
+
+def _patched_send_document(chat_id, document, caption=None, *args, **kwargs):
+    return _orig_send_document(chat_id, document, premium_text(caption), *args, **kwargs)
+
+
 bot.send_message = _patched_send_message
 bot.reply_to = _patched_reply_to
 bot.edit_message_text = _patched_edit_message_text
 bot.send_photo = _patched_send_photo
+bot.send_video = _patched_send_video
+bot.send_document = _patched_send_document
 
 # ------------------------------------------------------------------
 # STORAGE HELPERS
@@ -858,6 +875,7 @@ ADMIN_BTN_ADDSTOCK = "📥 Stock ថ្មី"
 ADMIN_BTN_DELPRODUCT = "🗑 លុប Product"
 ADMIN_BTN_EDITPRODUCT = "✏️ កែ Product"
 ADMIN_BTN_MSGUSER = "📨 ផ្ញើសារទៅ User"
+ADMIN_BTN_BROADCAST = "📢 ផ្ញើសារទៅគ្រប់គ្នា"
 ADMIN_BTN_EMOJI = "🎭 Setup Emoji"
 
 
@@ -876,6 +894,7 @@ def admin_reply_kb():
     kb.add(preply_btn(ADMIN_BTN_STATS, style="primary"), preply_btn(ADMIN_BTN_ADDPRODUCT, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_ADDSTOCK, style="primary"), preply_btn(ADMIN_BTN_DELPRODUCT, style="danger"))
     kb.add(preply_btn(ADMIN_BTN_EDITPRODUCT, style="primary"), preply_btn(ADMIN_BTN_MSGUSER, style="primary"))
+    kb.add(preply_btn(ADMIN_BTN_BROADCAST, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_EMOJI, style="primary"))
     return kb
 
@@ -1144,6 +1163,70 @@ def msguser_step_text(message, target_uid):
 def reply_admin_msguser(message):
     if is_admin(message.from_user.id):
         cmd_msguser(message)
+
+
+@bot.message_handler(commands=["broadcast"])
+def cmd_broadcast(message):
+    if not is_admin(message.from_user.id):
+        return
+    users = load_users()
+    msg = bot.send_message(
+        message.chat.id,
+        f"📢 <b>ផ្ញើសារទៅគ្រប់គ្នា</b>\n\nសរុប {len(users)} users។\nសូមផ្ញើមាតិកាសារ (text/photo/video ក៏បាន):",
+    )
+    bot.register_next_step_handler(msg, broadcast_step_content)
+
+
+def broadcast_step_content(message):
+    if not is_admin(message.from_user.id):
+        return
+    users = load_users()
+    uids = list(users.keys())
+    total = len(uids)
+    status = bot.send_message(message.chat.id, f"⏳ កំពុងផ្ញើ... 0/{total}")
+
+    sent, failed = 0, 0
+    for i, uid_str in enumerate(uids, start=1):
+        try:
+            target_uid = int(uid_str)
+        except Exception:
+            failed += 1
+            continue
+        try:
+            if message.content_type == "text":
+                bot.send_message(target_uid, f"📢 <b>សារពី Admin</b>\n\n{message.text}")
+            elif message.content_type == "photo":
+                bot.send_photo(target_uid, message.photo[-1].file_id, caption=message.caption or "")
+            elif message.content_type == "video":
+                bot.send_video(target_uid, message.video.file_id, caption=message.caption or "")
+            elif message.content_type == "document":
+                bot.send_document(target_uid, message.document.file_id, caption=message.caption or "")
+            else:
+                bot.forward_message(target_uid, message.chat.id, message.message_id)
+            sent += 1
+        except Exception:
+            failed += 1
+        time.sleep(0.05)  # ជៀសវាង Telegram rate limit
+        if i % 20 == 0 or i == total:
+            try:
+                bot.edit_message_text(
+                    f"⏳ កំពុងផ្ញើ... {i}/{total} (✅ {sent} / ❌ {failed})",
+                    message.chat.id,
+                    status.message_id,
+                )
+            except Exception:
+                pass
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ <b>ផ្ញើសារបញ្ចប់</b>\n\nសរុប: {total}\nជោគជ័យ: {sent}\nបរាជ័យ: {failed}",
+    )
+
+
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_BROADCAST))
+def reply_admin_broadcast(message):
+    if is_admin(message.from_user.id):
+        cmd_broadcast(message)
 
 
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_EMOJI))
