@@ -43,6 +43,10 @@ CAMRAPID_WEBHOOK_URL = os.environ.get(
     f"{PUBLIC_BASE_URL.rstrip('/')}/camrapid-webhook" if PUBLIC_BASE_URL else "",
 )
 STORE_NAME = "Kairozen Store"  # ឈ្មោះហាង — ដាក់ hardcode ត្រង់នេះ (មិនប្រើ env var ទៀតទេ)
+# ភាគរយ commission ដែលអ្នកណែនាំ (referrer) ទទួលបាន រាល់ពេលអ្នកដែលខ្លួនណែនាំ (referred user)
+# ដាក់លុយចូល wallet ជោគជ័យ (ឧ. 5 មានន័យថា ណែនាំគេដាក់ $10 → ខ្លួនឯងទទួល $0.50 ចូល wallet
+# ស្វ័យប្រវត្តិ)។ អាចកែបានតាម Env Var REFERRAL_PERCENT
+REFERRAL_PERCENT = float(os.environ.get("REFERRAL_PERCENT", "5"))
 # ID របស់ channel/group ដែលចង់ឲ្យ bot ផ្ញើសារជូនដំណឹងស្វ័យប្រវត្តិ ពេលមាន deposit
 # ឬ order ជោគជ័យ។ ដាក់ hardcode ត្រង់នេះផ្ទាល់ (negative number ឧ. -1001234567890
 # សម្រាប់ channel/supergroup) — អាចដាក់ច្រើនក្នុងមួយ list បាន ១ សម្រាប់ channel ១ សម្រាប់ group។
@@ -154,6 +158,14 @@ EMOJI_CATEGORIES = [
     ("⚡", "⚡ ទូទាត់ភ្លាមៗ (KHQR)"),
     ("📱", "📱 ស្កេន QR"),
     ("🎭", "🎭 Setup Emoji"),
+    ("✏️", "✏️ កែ/បញ្ចូលព័ត៌មាន"),
+    ("🔗", "🔗 ណែនាំមិត្ត (Referral)"),
+    ("🎉", "🎉 អបអរ/Bonus"),
+    ("👤", "👤 អ្នកប្រើប្រាស់ម្នាក់"),
+    ("📈", "📈 ស្ថិតិលក់ដាច់"),
+    ("🔎", "🔎 ស្វែងរក/Debug"),
+    ("✨", "✨ ការណែនាំ/Tips"),
+    ("🙏", "🙏 អរគុណ"),
 ]
 
 
@@ -365,9 +377,34 @@ def get_user(uid):
     users = load_users()
     uid = str(uid)
     if uid not in users:
-        users[uid] = {"balance": 0.0, "orders": 0}
+        users[uid] = {
+            "balance": 0.0,
+            "orders": 0,
+            "referred_by": None,   # uid (str) របស់អ្នកណែនាំ បើមាន
+            "ref_count": 0,        # ចំនួនអ្នកដែលខ្លួនណែនាំបានចូលរួម
+            "ref_earned": 0.0,     # commission សរុបដែលទទួលបានពី referral
+        }
         save_users(users)
     return users[uid]
+
+
+def credit_referral_commission(referred_uid, deposit_amount):
+    """បើ user ដែលបានដាក់លុយនេះ ត្រូវបានណែនាំដោយអ្នកណា — បន្ថែម commission
+    (REFERRAL_PERCENT%) ចូល wallet អ្នកណែនាំនោះ ស្វ័យប្រវត្តិ។ ហៅរាល់ពេល deposit
+    ជោគជ័យ (មិនមែនតែលើកដំបូងទេ)។ Return (referrer_uid, bonus) ឬ (None, 0)។"""
+    with _lock:
+        users = load_users()
+        u = users.get(str(referred_uid))
+        ref_uid = u.get("referred_by") if u else None
+        if not ref_uid or str(ref_uid) == str(referred_uid) or str(ref_uid) not in users:
+            return None, 0.0
+        bonus = round(deposit_amount * REFERRAL_PERCENT / 100.0, 2)
+        if bonus <= 0:
+            return None, 0.0
+        users[str(ref_uid)]["balance"] = round(users[str(ref_uid)].get("balance", 0.0) + bonus, 2)
+        users[str(ref_uid)]["ref_earned"] = round(users[str(ref_uid)].get("ref_earned", 0.0) + bonus, 2)
+        save_users(users)
+        return ref_uid, bonus
 
 
 def update_balance(uid, delta):
@@ -746,6 +783,17 @@ def poll_deposit(uid, chat_id, amount, reference, user_label=None, max_minutes=5
                 f"👤 {user_label or 'User'}\n"
                 f"💵 ${amount:.2f}"
             )
+            ref_uid, bonus = credit_referral_commission(uid, amount)
+            if ref_uid:
+                try:
+                    bot.send_message(
+                        int(ref_uid),
+                        f"🎉 <b>Referral Commission!</b>\n\n"
+                        f"👤 {user_label or 'អ្នកដែលអ្នកណែនាំ'} បានដាក់លុយ ${amount:.2f}\n"
+                        f"💵 អ្នកទទួលបាន <b>${bonus:.2f}</b> ({REFERRAL_PERCENT:.0f}%) ចូល wallet ស្វ័យប្រវត្តិ!",
+                    )
+                except Exception:
+                    pass
             return
         time.sleep(8)
     try:
@@ -757,6 +805,29 @@ def poll_deposit(uid, chat_id, amount, reference, user_label=None, max_minutes=5
 # ------------------------------------------------------------------
 # UI HELPERS
 # ------------------------------------------------------------------
+_bot_username_cache = None
+
+
+def get_bot_username():
+    """ទាញ @username របស់ bot ខ្លួនឯង (cache ទុកកុំហៅ Telegram API រាល់ដង)
+    ត្រូវការសម្រាប់បង្កើត referral link https://t.me/<username>?start=ref_<uid>"""
+    global _bot_username_cache
+    if _bot_username_cache:
+        return _bot_username_cache
+    try:
+        _bot_username_cache = bot.get_me().username
+    except Exception:
+        _bot_username_cache = None
+    return _bot_username_cache
+
+
+def referral_link_for(uid):
+    uname = get_bot_username()
+    if not uname:
+        return None
+    return f"https://t.me/{uname}?start=ref_{uid}"
+
+
 def main_menu_kb():
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -765,6 +836,9 @@ def main_menu_kb():
     )
     kb.add(
         pbtn("📦 ការកម្មង់របស់ខ្ញុំ", callback_data="menu_orders"),
+        pbtn("🔗 ណែនាំមិត្ត (Referral)", callback_data="menu_referral"),
+    )
+    kb.add(
         pbtn("☎️ ទំនាក់ទំនង Admin", url="tg://user?id=%d" % ADMIN_ID),
     )
     return kb
@@ -868,6 +942,7 @@ BTN_SHOP = "🛒 ទិញ Account"
 BTN_WALLET = "💰 Wallet"
 BTN_DEPOSIT = "➕ បញ្ចូលលុយ"
 BTN_ORDERS = "📦 ការកម្មង់"
+BTN_REFERRAL = "🔗 ណែនាំមិត្ត"
 BTN_HELP = "☎️ ជួយខ្ញុំផង"
 
 ADMIN_BTN_STATS = "📊 ស្ថិតិ"
@@ -884,7 +959,7 @@ def main_reply_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add(preply_btn(BTN_SHOP, style="primary"), preply_btn(BTN_WALLET, style="primary"))
     kb.add(preply_btn(BTN_DEPOSIT, style="primary"), preply_btn(BTN_ORDERS, style="primary"))
-    kb.add(preply_btn(BTN_HELP, style="primary"))
+    kb.add(preply_btn(BTN_REFERRAL, style="primary"), preply_btn(BTN_HELP, style="primary"))
     return kb
 
 
@@ -892,6 +967,7 @@ def admin_reply_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add(preply_btn(BTN_SHOP, style="primary"), preply_btn(BTN_WALLET, style="primary"))
     kb.add(preply_btn(BTN_DEPOSIT, style="primary"), preply_btn(BTN_ORDERS, style="primary"))
+    kb.add(preply_btn(BTN_REFERRAL, style="primary"), preply_btn(BTN_HELP, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_STATS, style="primary"), preply_btn(ADMIN_BTN_ADDPRODUCT, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_ADDSTOCK, style="primary"), preply_btn(ADMIN_BTN_DELPRODUCT, style="danger"))
     kb.add(preply_btn(ADMIN_BTN_EDITPRODUCT, style="primary"), preply_btn(ADMIN_BTN_MSGUSER, style="primary"))
@@ -907,21 +983,53 @@ def reply_kb_for(uid):
 # ------------------------------------------------------------------
 # USER COMMANDS
 # ------------------------------------------------------------------
+def _link_referral_if_new(message):
+    """បើនេះជា userថ្មីទាំងស្រុង (មិនទាន់ធ្លាប់ចូល bot ពីមុន) ហើយ /start មាន payload
+    ជា 'ref_<uid>' — ចងទំនាក់ទំនង referred_by + បន្ថែម ref_count ឲ្យអ្នកណែនាំ។
+    ត្រូវហៅមុន get_user() ព្រោះ get_user() នឹងបង្កើត record ថ្មីភ្លាមៗ។"""
+    uid = message.from_user.id
+    users = load_users()
+    is_new = str(uid) not in users
+    parts = (message.text or "").split(maxsplit=1)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+    if is_new and payload.startswith("ref_"):
+        try:
+            ref_uid = int(payload[len("ref_"):])
+        except ValueError:
+            ref_uid = None
+        if ref_uid and ref_uid != uid and str(ref_uid) in users:
+            with _lock:
+                users = load_users()
+                users[str(uid)] = {
+                    "balance": 0.0, "orders": 0,
+                    "referred_by": str(ref_uid), "ref_count": 0, "ref_earned": 0.0,
+                }
+                users[str(ref_uid)]["ref_count"] = users[str(ref_uid)].get("ref_count", 0) + 1
+                save_users(users)
+            try:
+                bot.send_message(ref_uid, f"👥 មានមិត្តភ័ក្តិម្នាក់ចូលរួមតាមរយៈ referral link របស់អ្នក!")
+            except Exception:
+                pass
+
+
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
+    _link_referral_if_new(message)
     get_user(message.from_user.id)
     first_name = message.from_user.first_name or "មិត្ត"
     text = (
-        f"👋 <b>សួស្តី {first_name}!</b>\n\n"
-        f"🏠 សូមស្វាគមន៍មកកាន់ <b>{STORE_NAME}</b> — កន្លែងទិញ account premium "
-        f"(ChatGPT, Netflix, Spotify, Canva...) ដោយសុវត្ថិភាព ភ្លាមៗ តាមរយៈ KHQR។\n\n"
-        f"👉 ប្រើប៊ូតុងខាងក្រោមដើម្បីចាប់ផ្តើម:\n"
-        f"🛒 <b>ទិញ Account</b> — មើលផលិតផលទាំងអស់ក្នុងស្តុក\n"
-        f"💰 <b>Wallet</b> — ពិនិត្យសមតុល្យ និងប្រវត្តិកម្មង់\n"
-        f"➕ <b>បញ្ចូលលុយ</b> — ដាក់លុយចូល Wallet ដោយ KHQR\n"
-        f"📦 <b>ការកម្មង់</b> — មើលការកម្មង់ចុងក្រោយរបស់អ្នក\n"
-        f"☎️ <b>ជួយខ្ញុំផង</b> — ទំនាក់ទំនង Admin ផ្ទាល់\n\n"
-        f"✨ ត្រូវដាក់លុយចូល Wallet មុនទិញ — ទិញរួច account ផ្ញើមកភ្លាមៗ! សូមរីករាយជាមួយ {STORE_NAME} 🙏"
+        f"👋 <b>សួស្តី {first_name}, សូមស្វាគមន៍មកកាន់ {STORE_NAME}!</b> 🏠\n\n"
+        f"យើងខ្ញុំជាកន្លែងទិញ account premium ដូចជា ChatGPT, Netflix, Spotify, "
+        f"Office 365, Canva... <b>ដឹកជញ្ជូនភ្លាមៗ</b> ក្រោយទូទាត់ដោយ KHQR ០សុវត្ថិភាព។\n\n"
+        f"👉 <b>របៀបប្រើ Bot:</b>\n"
+        f"🛒 <b>ទិញ Account</b> — មើល stock ទាំងអស់ដែលមានឥឡូវនេះ\n"
+        f"➕ <b>បញ្ចូលលុយ</b> — ស្កេន KHQR បញ្ចូល Wallet ក្នុងប៉ុន្មានវិនាទី\n"
+        f"💰 <b>Wallet</b> — មើលសមតុល្យ និងប្រវត្តិកម្មង់\n"
+        f"📦 <b>ការកម្មង់</b> — មើល account ដែលធ្លាប់ទិញរួច\n"
+        f"🔗 <b>ណែនាំមិត្ត</b> — ចែក link ថែមចំណូល {REFERRAL_PERCENT:.0f}% រៀងរហូត\n"
+        f"☎️ <b>ជួយខ្ញុំផង</b> — ជជែកផ្ទាល់ជាមួយ Admin\n\n"
+        f"✨ <i>ព័ត៌មានជំនួយ:</i> ត្រូវបញ្ចូលលុយចូល Wallet សិន រួចជ្រើសរើសទិញបាន — account ផ្ញើមកភ្លាមៗដោយស្វ័យប្រវត្តិ!\n"
+        f"🙏 អរគុណដែលទុកចិត្ត {STORE_NAME}"
     )
     # ផ្ញើសារតែមួយប៉ុណ្ណោះ (reply keyboard ភ្ជាប់ជាមួយសារនេះតែម្តង) — កុំឲ្យម៉ឺនុយបង្ហាញស្ទួនគ្នា ២ ដង
     bot.send_message(message.chat.id, text, reply_markup=reply_kb_for(message.from_user.id))
@@ -991,6 +1099,25 @@ def reply_orders(message):
         return
     lines = [f"• {o['product']} - ${o['price']:.2f} - {o['time']}" for o in mine[-10:]]
     bot.send_message(message.chat.id, "📦 ការកម្មង់ចុងក្រោយ:\n" + "\n".join(lines))
+
+
+def referral_info_text(uid):
+    u = get_user(uid)
+    link = referral_link_for(uid)
+    link_line = f"🔗 <code>{link}</code>" if link else "🔗 (Bot username មិនទាន់ត្រៀមរួច សូមព្យាយាមម្តងទៀត)"
+    return (
+        f"🔗 <b>ណែនាំមិត្ត — ទទួល {REFERRAL_PERCENT:.0f}% ជារៀងរហូត!</b>\n\n"
+        f"ចែក link ខាងក្រោមទៅមិត្តភ័ក្តិ។ រាល់ពេលគេដាក់លុយចូល wallet "
+        f"(មិនកំណត់ចំនួនដង) អ្នកទទួលបាន {REFERRAL_PERCENT:.0f}% ចូល wallet ស្វ័យប្រវត្តិ!\n\n"
+        f"{link_line}\n\n"
+        f"👥 អ្នកបានណែនាំ: <b>{u.get('ref_count', 0)} នាក់</b>\n"
+        f"💵 Commission ទទួលបានសរុប: <b>${u.get('ref_earned', 0.0):.2f}</b>"
+    )
+
+
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_REFERRAL))
+def reply_referral(message):
+    bot.send_message(message.chat.id, referral_info_text(message.from_user.id))
 
 
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_HELP))
@@ -1167,18 +1294,6 @@ def reply_admin_msguser(message):
         cmd_msguser(message)
 
 
-@bot.message_handler(commands=["broadcast"])
-def cmd_broadcast(message):
-    if not is_admin(message.from_user.id):
-        return
-    users = load_users()
-    msg = bot.send_message(
-        message.chat.id,
-        f"📢 <b>ផ្ញើសារទៅគ្រប់គ្នា</b>\n\nសរុប {len(users)} users។\nសូមផ្ញើមាតិកាសារ (text/photo/video ក៏បាន):",
-    )
-    bot.register_next_step_handler(msg, broadcast_step_content)
-
-
 def broadcast_step_content(message):
     if not is_admin(message.from_user.id):
         return
@@ -1268,6 +1383,12 @@ def callback_router(call):
         lines = [f"• {o['product']} - ${o['price']:.2f} - {o['time']}" for o in mine[-10:]]
         bot.edit_message_text(
             "📦 ការកម្មង់ចុងក្រោយ:\n" + "\n".join(lines),
+            chat_id, call.message.message_id, reply_markup=main_menu_kb(),
+        )
+
+    elif data == "menu_referral":
+        bot.edit_message_text(
+            referral_info_text(uid),
             chat_id, call.message.message_id, reply_markup=main_menu_kb(),
         )
 
