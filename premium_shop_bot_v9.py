@@ -56,6 +56,11 @@ NOTIFY_CHAT_IDS = [
     # -1002222222222,   # <- ដាក់ ID ទីពីរនៅទីនេះ បើមាន channel/group ថែមទៀត
 ]
 
+# ពេលស្តុក product មួយធ្លាក់មកដល់ចំនួននេះ ឬតិចជាងនេះ (ប៉ុន្តែមិនទាន់អស់ស្រុង) bot នឹងផ្ញើសារ
+# ជូនដំណឹងទៅ user គ្រប់គ្នា ដើម្បីជំរុញឲ្យទិញឲ្យឆាប់មុនអស់ស្តុក (មួយដងក្នុងមួយជុំស្តុក —
+# reset ស្វ័យប្រវត្តិពេល admin បញ្ចូល stock ថ្មី)។ អាចកែបានតាម Env Var LOW_STOCK_THRESHOLD
+LOW_STOCK_THRESHOLD = int(os.environ.get("LOW_STOCK_THRESHOLD", "3"))
+
 # ត្រូវការ Render Persistent Disk mount នៅ path នេះ (Render Dashboard -> service
 # -> Disks -> Add Disk -> Mount Path = /var/data) បើមិនដូច្នេះទេ data នៅតែបាត់ពេល
 # deploy ដដែល ព្រោះ local filesystem ធម្មតារបស់ Render ជា ephemeral (reset រាល់
@@ -162,7 +167,10 @@ EMOJI_CATEGORIES = [
     ("🔗", "🔗 ណែនាំមិត្ត (Referral)"),
     ("🎉", "🎉 អបអរ/Bonus"),
     ("👤", "👤 អ្នកប្រើប្រាស់ម្នាក់"),
-    ("📈", "📈 ស្ថិតិលក់ដាច់"),
+    ("📈", "📈 ស្ថិតិលក់ដាច់ / តម្លៃឡើង"),
+    ("📉", "📉 តម្លៃចុះ / បញ្ចុះតម្លៃ"),
+    ("📭", "📭 អស់ស្តុក (empty)"),
+    ("ℹ️", "ℹ️ ព័ត៌មាន"),
     ("🔎", "🔎 ស្វែងរក/Debug"),
     ("✨", "✨ ការណែនាំ/Tips"),
     ("🙏", "🙏 អរគុណ"),
@@ -466,6 +474,49 @@ def pop_stock_items(product_key, qty):
             break
         items.append(it)
     return items
+
+
+def peek_stock_items(product_key, limit=None):
+    """អានមើល account ទាំងអស់ក្នុង stock (មិនលុបចេញទេ) → list តាមលំដាប់ FIFO
+    (item ដំបូង = index 1 = ជាអ្នកដែលនឹងត្រូវលក់មុនគេ)។ ប្រើសម្រាប់បង្ហាញ preview
+    មុនពេលលុប។ limit កំណត់ចំនួនអតិបរមាដែល return (None = យកទាំងអស់)"""
+    p = stock_path(product_key)
+    if not os.path.exists(p):
+        return []
+    with open(p, "r", encoding="utf-8") as f:
+        lines = [l.strip() for l in f if l.strip()]
+    if limit:
+        return lines[:limit]
+    return lines
+
+
+def remove_stock_items_by_indices(product_key, indices):
+    """លុប account ជាក់លាក់ចេញពី stock តាម index (1-based, តាមលំដាប់ FIFO ដូច preview)។
+    indices: iterable នៃលេខ int។ Return (removed_items, remaining_count)។"""
+    with _lock:
+        p = stock_path(product_key)
+        if not os.path.exists(p):
+            return [], 0
+        with open(p, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        idx_set = {i for i in indices if 1 <= i <= len(lines)}
+        removed = [lines[i - 1] for i in sorted(idx_set)]
+        kept = [lines[i] for i in range(len(lines)) if (i + 1) not in idx_set]
+        with open(p, "w", encoding="utf-8") as f:
+            for it in kept:
+                f.write(it + "\n")
+        return removed, len(kept)
+
+
+def clear_stock_items(product_key):
+    """លុប stock ទាំងអស់របស់ product មួយ (ចោលចោលទាំង account) → return ចំនួនដែលបានលុប"""
+    with _lock:
+        p = stock_path(product_key)
+        count = stock_count(product_key)
+        if os.path.exists(p):
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("")
+        return count
 
 
 # ------------------------------------------------------------------
@@ -948,6 +999,7 @@ BTN_HELP = "☎️ ជួយខ្ញុំផង"
 ADMIN_BTN_STATS = "📊 ស្ថិតិ"
 ADMIN_BTN_ADDPRODUCT = "➕ Product ថ្មី"
 ADMIN_BTN_ADDSTOCK = "📥 Stock ថ្មី"
+ADMIN_BTN_DELSTOCK = "🗑 លុប Stock"
 ADMIN_BTN_DELPRODUCT = "🗑 លុប Product"
 ADMIN_BTN_EDITPRODUCT = "✏️ កែ Product"
 ADMIN_BTN_MSGUSER = "📨 ផ្ញើសារទៅ User"
@@ -969,8 +1021,9 @@ def admin_reply_kb():
     kb.add(preply_btn(BTN_DEPOSIT, style="primary"), preply_btn(BTN_ORDERS, style="primary"))
     kb.add(preply_btn(BTN_REFERRAL, style="primary"), preply_btn(BTN_HELP, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_STATS, style="primary"), preply_btn(ADMIN_BTN_ADDPRODUCT, style="primary"))
-    kb.add(preply_btn(ADMIN_BTN_ADDSTOCK, style="primary"), preply_btn(ADMIN_BTN_DELPRODUCT, style="danger"))
-    kb.add(preply_btn(ADMIN_BTN_EDITPRODUCT, style="primary"), preply_btn(ADMIN_BTN_MSGUSER, style="primary"))
+    kb.add(preply_btn(ADMIN_BTN_ADDSTOCK, style="primary"), preply_btn(ADMIN_BTN_DELSTOCK, style="danger"))
+    kb.add(preply_btn(ADMIN_BTN_DELPRODUCT, style="danger"), preply_btn(ADMIN_BTN_EDITPRODUCT, style="primary"))
+    kb.add(preply_btn(ADMIN_BTN_MSGUSER, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_BROADCAST, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_EMOJI, style="primary"))
     return kb
@@ -1214,6 +1267,9 @@ def editproduct_step_price(message, key):
     products[key]["price"] = new_price
     save_products(products)
     bot.reply_to(message, f"✅ បានប្តូរតម្លៃពី ${old_price:.2f} ទៅ ${new_price:.2f} រួចហើយ")
+    if new_price != old_price:
+        sent, failed = broadcast_price_change(key, old_price, new_price)
+        bot.send_message(message.chat.id, f"📢 ជូនដំណឹងតម្លៃថ្មីទៅ user {sent} នាក់ ({failed} បរាជ័យ)")
 
 
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_ADDSTOCK))
@@ -1224,6 +1280,17 @@ def reply_admin_addstock(message):
         message.chat.id,
         "📥 <b>Stock ថ្មី</b>\n\nជ្រើសរើស product ដែលចង់បញ្ចូល stock:",
         reply_markup=admin_product_pick_kb("admaddstock"),
+    )
+
+
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_DELSTOCK))
+def reply_admin_delstock(message):
+    if not is_admin(message.from_user.id):
+        return
+    bot.send_message(
+        message.chat.id,
+        "🗑 <b>លុប Stock</b>\n\nជ្រើសរើស product ដែលចង់លុប stock ចេញ:",
+        reply_markup=admin_product_pick_kb("admdelstock"),
     )
 
 
@@ -1452,6 +1519,73 @@ def callback_router(call):
         )
         bot.register_next_step_handler(call.message, process_addstock, key)
 
+    elif data.startswith("admdelstock_"):
+        if not is_admin(uid):
+            return
+        key = data.split("_", 1)[1]
+        products = load_products()
+        if key not in products:
+            bot.answer_callback_query(call.id, "❌ Product មិនត្រឹមត្រូវ", show_alert=True)
+            return
+        total = stock_count(key)
+        if total == 0:
+            bot.edit_message_text(
+                f"📭 '{products[key]['name']}' គ្មាន stock សល់ទេ។",
+                chat_id, call.message.message_id,
+            )
+            bot.answer_callback_query(call.id)
+            return
+        preview = peek_stock_items(key, limit=30)
+        lines = [f"{i+1}. <code>{html.escape(it)}</code>" for i, it in enumerate(preview)]
+        more_note = f"\n… និងមាន {total - len(preview)} ទៀត (មិនបានបង្ហាញ)" if total > len(preview) else ""
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        kb.add(pbtn("🗑 លុបទាំងអស់ (Clear All)", callback_data=f"admclearstockconfirm_{key}", style="danger"))
+        kb.add(pbtn("🔙 បោះបង់", callback_data="admcancel"))
+        msg = bot.edit_message_text(
+            f"🗑 <b>លុប Stock — {products[key]['name']}</b> (សរុប {total})\n\n"
+            + "\n".join(lines) + more_note +
+            "\n\nសូមវាយបញ្ចូល <b>លេខ</b> ដែលចង់លុប (ឧ. <code>1,3,5</code>) រួចផ្ញើមក "
+            "ឬចុច 🗑 លុបទាំងអស់ខាងក្រោម:",
+            chat_id, call.message.message_id,
+            reply_markup=kb,
+        )
+        bot.register_next_step_handler(msg, process_delstock_indices, key)
+
+    elif data.startswith("admclearstockconfirm_"):
+        if not is_admin(uid):
+            return
+        key = data.split("_", 1)[1]
+        products = load_products()
+        if key not in products:
+            bot.answer_callback_query(call.id, "❌ Product មិនត្រឹមត្រូវ", show_alert=True)
+            return
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            pbtn("✅ បាទ/ចាស លុបទាំងអស់", callback_data=f"admclearstockyes_{key}", style="danger"),
+            pbtn("🔙 បោះបង់", callback_data="admcancel"),
+        )
+        bot.edit_message_text(
+            f"⚠️ តើអ្នកប្រាកដថាចង់លុប stock ទាំង {stock_count(key)} account "
+            f"របស់ '{products[key]['name']}' ចោលទាំងអស់មែនទេ? (មិនអាចដកមកវិញបានទេ)",
+            chat_id, call.message.message_id,
+            reply_markup=kb,
+        )
+
+    elif data.startswith("admclearstockyes_"):
+        if not is_admin(uid):
+            return
+        key = data.split("_", 1)[1]
+        products = load_products()
+        if key not in products:
+            bot.answer_callback_query(call.id, "❌ Product មិនត្រឹមត្រូវ", show_alert=True)
+            return
+        removed = clear_stock_items(key)
+        bot.edit_message_text(
+            f"✅ បានលុប stock ទាំង {removed} account របស់ '{products[key]['name']}' រួចហើយ\n"
+            f"📊 ស្តុកសល់: {stock_count(key)}",
+            chat_id, call.message.message_id,
+        )
+
     elif data.startswith("admdelyes_"):
         if not is_admin(uid):
             return
@@ -1617,6 +1751,19 @@ def handle_buy_wallet(call, product_key, qty=1):
         f"👤 {public_user_label(call.from_user)}"
     )
 
+    # ជិតអស់ស្តុក? ជូនដំណឹងទៅ user ទាំងអស់ឲ្យទិញឲ្យឆាប់ (ផ្ញើតែម្តងក្នុងមួយជុំស្តុក
+    # ដោយប្រើ flag low_stock_alerted — reset ស្វ័យប្រវត្តិពេល admin បញ្ចូល stock ថ្មី)
+    left_after = stock_count(product_key)
+    if 0 < left_after <= LOW_STOCK_THRESHOLD:
+        products2 = load_products()
+        if product_key in products2 and not products2[product_key].get("low_stock_alerted"):
+            products2[product_key]["low_stock_alerted"] = True
+            save_products(products2)
+            try:
+                broadcast_low_stock(product_key, left_after)
+            except Exception as e:
+                print(f"[broadcast_low_stock] failed: {e}", flush=True)
+
 
 def handle_deposit(uid, chat_id, amount, user_obj, call=None):
     def _fail(err_text):
@@ -1771,6 +1918,36 @@ def cmd_addstock(message):
         bot.reply_to(message, "ទំរង់ត្រូវជា: /addstock key")
 
 
+@bot.message_handler(commands=["delstock"])
+def cmd_delstock(message):
+    if not is_admin(message.from_user.id):
+        return
+    # ទំរង់: /delstock key
+    try:
+        _, key = message.text.split(" ", 1)
+        key = key.strip()
+        products = load_products()
+        if key not in products:
+            bot.reply_to(message, "❌ Product key មិនត្រឹមត្រូវ")
+            return
+        total = stock_count(key)
+        if total == 0:
+            bot.reply_to(message, f"📭 '{products[key]['name']}' គ្មាន stock សល់ទេ។")
+            return
+        preview = peek_stock_items(key, limit=30)
+        lines = [f"{i+1}. <code>{html.escape(it)}</code>" for i, it in enumerate(preview)]
+        more_note = f"\n… និងមាន {total - len(preview)} ទៀត (មិនបានបង្ហាញ)" if total > len(preview) else ""
+        msg = bot.reply_to(
+            message,
+            f"🗑 <b>លុប Stock — {products[key]['name']}</b> (សរុប {total})\n\n"
+            + "\n".join(lines) + more_note +
+            "\n\nសូមវាយបញ្ចូល <b>លេខ</b> ដែលចង់លុប (ឧ. <code>1,3,5</code>):",
+        )
+        bot.register_next_step_handler(msg, process_delstock_indices, key)
+    except Exception:
+        bot.reply_to(message, "ទំរង់ត្រូវជា: /delstock key")
+
+
 def broadcast_new_stock(key, added_count):
     """ជូនដំណឹងទៅ user ទាំងអស់ពេល stock ថ្មីត្រូវបានបន្ថែម (ដូចរូបគំរូ)"""
     products = load_products()
@@ -1797,16 +1974,122 @@ def broadcast_new_stock(key, added_count):
     return sent, failed
 
 
+def broadcast_price_change(key, old_price, new_price):
+    """ជូនដំណឹងទៅ user ទាំងអស់ (និង channel/group) ពេល admin កែតម្លៃ product មួយ —
+    សារខុសគ្នាបើឡើងថ្លៃ (📈) ធៀបនឹងចុះថោក (📉, ជំរុញឲ្យទិញព្រោះកម្រៃថោក)"""
+    products = load_products()
+    p = products.get(key)
+    if not p or new_price == old_price:
+        return 0, 0
+    icon = p.get("icon", "📦")
+    if new_price < old_price:
+        pct = round((old_price - new_price) / old_price * 100) if old_price else 0
+        header = f"📉 <b>បញ្ចុះតម្លៃ! {p['name']} ថោកជាងមុន{f' {pct}%' if pct else ''}!</b>"
+        cta = "🎉 ចាប់ឱកាសទិញឥឡូវ មុនតម្លៃឡើងវិញ!"
+    else:
+        header = f"📈 <b>តម្លៃថ្មី — {p['name']}</b>"
+        cta = "ℹ️ តម្លៃត្រូវបានធ្វើបច្ចុប្បន្នភាព។"
+    text = (
+        f"{header}\n\n"
+        f"💵 តម្លៃចាស់: <s>${old_price:.2f}</s>\n"
+        f"💰 តម្លៃថ្មី: <b>${new_price:.2f}</b>\n\n"
+        f"{cta}"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(pbtn(f"{icon} {p['name'].upper()} — ${new_price:.2f}", callback_data=f"buyopt_{key}", style="success"))
+    users = load_users()
+    sent, failed = 0, 0
+    for uid in users:
+        try:
+            bot.send_message(int(uid), text, reply_markup=kb)
+            sent += 1
+        except Exception:
+            failed += 1
+    notify_public(
+        f"{header}\n💵 <s>${old_price:.2f}</s> → 💰 <b>${new_price:.2f}</b>"
+    )
+    return sent, failed
+
+
+def broadcast_low_stock(key, left):
+    """ជូនដំណឹង 'ជិតអស់ស្តុក' ទៅ user ទាំងអស់ (និង channel/group ក្នុង NOTIFY_CHAT_IDS)
+    ដើម្បីជំរុញឲ្យទិញឲ្យឆាប់មុនអស់ស្តុក។ ហៅត្រឹមតែម្តងក្នុងមួយជុំស្តុក (មើល low_stock_alerted
+    flag ក្នុង handle_buy_wallet) — មិនផ្ញើឡើងវិញរាល់ការទិញនីមួយៗទេ។"""
+    products = load_products()
+    p = products.get(key)
+    if not p:
+        return 0, 0
+    icon = p.get("icon", "📦")
+    text = (
+        f"🚨 <b>ស្តុកជិតអស់ហើយ — {p['name']}!</b>\n\n"
+        f"📦 សល់តែ <b>{left} accounts</b> ប៉ុណ្ណោះ\n"
+        f"💰 តម្លៃ: <b>${p['price']:.2f}</b>\n\n"
+        f"⏳ សូមទិញឲ្យឆាប់មុនអស់ស្តុក!"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(pbtn(f"{icon} ទិញឥឡូវ — {p['name'].upper()}", callback_data=f"buyopt_{key}", style="success"))
+    users = load_users()
+    sent, failed = 0, 0
+    for uid in users:
+        try:
+            bot.send_message(int(uid), text, reply_markup=kb)
+            sent += 1
+        except Exception:
+            failed += 1
+    notify_public(
+        f"🚨 <b>ស្តុកជិតអស់ — {icon} {p['name']}!</b>\nសល់តែ {left} accounts ទៀតប៉ុណ្ណោះ 💵 ${p['price']:.2f}\n⏳ ទិញឲ្យឆាប់!"
+    )
+    return sent, failed
+
+
 def process_addstock(message, key):
     if not is_admin(message.from_user.id):
         return
     items = message.text.split("\n")
     added = len([i for i in items if i.strip()])
     push_stock_items(key, items)
+    # reset ការជូនដំណឹង "ជិតអស់ស្តុក" ព្រោះទើបតែបញ្ចូល stock ថ្មី — ជុំក្រោយបើធ្លាក់ទាប
+    # ដល់ LOW_STOCK_THRESHOLD ទៀត bot នឹងផ្ញើសារជូនដំណឹងម្តងទៀត
+    products = load_products()
+    if key in products and products[key].get("low_stock_alerted"):
+        products[key]["low_stock_alerted"] = False
+        save_products(products)
     bot.reply_to(message, f"✅ បន្ថែម {added} accounts ចូល stock '{key}'\n"
                            f"ស្តុករួម: {stock_count(key)}")
     sent, failed = broadcast_new_stock(key, added)
     bot.send_message(message.chat.id, f"📢 ជូនដំណឹងទៅ user {sent} នាក់ ({failed} បរាជ័យ)")
+
+
+def process_delstock_indices(message, key):
+    """ទទួល message ដែល admin វាយបញ្ចូលលេខ (ឧ. '1,3,5') បន្ទាប់ពីជ្រើសរើស product
+    ក្នុងម៉ឺនុយ 🗑 លុប Stock — លុប account ទាំងនោះចេញពី stock តាម index (1-based)"""
+    if not is_admin(message.from_user.id):
+        return
+    products = load_products()
+    if key not in products:
+        bot.reply_to(message, "❌ Product មិនត្រឹមត្រូវ (ប្រហែលជាត្រូវបានលុបទៅហើយ)")
+        return
+    raw = (message.text or "").strip()
+    if not raw:
+        bot.reply_to(message, "❌ សូមវាយបញ្ចូលលេខ (ឧ. 1,3,5)")
+        return
+    try:
+        indices = [int(x.strip()) for x in raw.replace(" ", "").split(",") if x.strip()]
+        if not indices:
+            raise ValueError
+    except ValueError:
+        bot.reply_to(message, "❌ ទំរង់មិនត្រឹមត្រូវ។ សូមវាយជាលេខ ខណ្ឌដោយ , (ឧ. 1,3,5)")
+        return
+    removed, remaining = remove_stock_items_by_indices(key, indices)
+    if not removed:
+        bot.reply_to(message, "❌ គ្មាន item ត្រូវនឹងលេខដែលអ្នកបញ្ចូលទេ (ប្រហែលជាលេខហួសព្រំដែន)")
+        return
+    lines = "\n".join(f"• <code>{html.escape(it)}</code>" for it in removed)
+    bot.reply_to(
+        message,
+        f"✅ បានលុប {len(removed)} account ចេញពី stock '{products[key]['name']}':\n{lines}\n\n"
+        f"📊 ស្តុកសល់: {remaining}",
+    )
 
 
 def all_emoji_categories():
