@@ -11,10 +11,12 @@ Kairozen Premium Account Shop Bot
 ត្រូវការ Environment Variables:
   BOT_TOKEN            - Telegram Bot Token
   ADMIN_ID             - Telegram user id របស់ admin (លេខ)
-  CAMRAPIDPAY_API_KEY  - API key របស់ CamRapidPay
-  CAMRAPIDPAY_BASE_URL - (default: https://api.camrapidpay.com) កែតាមឯកសារពិត
-  KHPAY_API_KEY         - API key របស់ https://khpay.site (ចាំបាច់សម្រាប់ deposit តាម ABA/Bakong)
+  CAMRAPIDPAY_API_KEY  - API key របស់ CamRapidPay (ចាំបាច់សម្រាប់ deposit តាម Bakong KHQR)
+  CAMRAPID_CREATE_URL / CAMRAPID_CHECK_URL / PUBLIC_BASE_URL - កំណត់ webhook_url សម្រាប់ CamRapidPay
+  KHPAY_API_KEY         - API key របស់ https://khpay.site (ចាំបាច់សម្រាប់ deposit តាម ABA ប៉ុណ្ណោះ)
                           យកបាននៅ https://www.khpay.site/dashboard/settings
+
+ចំណាំ (v11): Bakong KHQR deposit → CamRapidPay | ABA deposit → khpay.site
 """
 
 import os
@@ -1872,8 +1874,9 @@ def handle_buy_wallet(call, product_key, qty=1):
 
 
 def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
-    """method: "aba" -> ABA PayWay QR (khpay.site /qr/generate)
-               "bakong" -> Bakong KHQR (khpay.site /bakong/generate)"""
+    """method: "aba"    -> ABA PayWay QR (khpay.site /qr/generate)
+               "bakong" -> Bakong KHQR (CamRapidPay) — តាមការកំណត់ថ្មី៖
+               Bakong ប្រើ CamRapidPay, ឯ ABA នៅតែប្រើ khpay.site ដដែល។"""
     def _fail(err_text):
         if call:
             bot.answer_callback_query(call.id, err_text, show_alert=True)
@@ -1884,6 +1887,51 @@ def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
     ref_disp = f"DEP-{hashlib.md5(ref.encode()).hexdigest()[:8].upper()}"
     method_label = "ABA" if method == "aba" else "Bakong KHQR"
 
+    caption = (
+        f"💰 Deposit <b>${amount:.2f}</b>\n💳 វិធីទូទាត់: <b>{method_label}</b>\n🔖 <code>{ref_disp}</code>\n\n"
+        f"📱 សូម Scan QR ខាងក្រោម (ឬចុចប៊ូតុងទំព័រទូទាត់) ដើម្បីបញ្ចូលលុយចូល Wallet\n"
+        f"✅ ប្រព័ន្ធនឹង detect ស្វ័យប្រវត្តិ\n⏳ QR ផុតកំណត់ក្នុង ~5-10 នាទី"
+    )
+
+    # ---------- BAKONG → CamRapidPay ----------
+    if method == "bakong":
+        data = camrapid_create(amount, ref)
+        if not data:
+            _fail(f"❌ មិនអាចបង្កើត QR បានទេ ({method_label})\n\nមូលហេតុ:\n{_last_camrapid_error[:180]}")
+            return
+
+        qr_string = data.get("qr_code", "")
+        payment_url = data.get("payment_url", "")
+
+        kb = None
+        if payment_url:
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("🔗 បើកទំព័រទូទាត់", url=payment_url))
+
+        img_buf = build_qr_image(
+            qr_string, amount=amount, ref=ref_disp,
+            label="Wallet Top-Up", subtitle=f"{STORE_NAME} · Bakong KHQR",
+        ) if qr_string else None
+        photo = img_buf or None
+
+        if photo:
+            bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
+        elif payment_url:
+            bot.send_message(chat_id, caption, reply_markup=kb)
+        else:
+            _fail("❌ គ្មានទិន្នន័យ QR ត្រឡប់មកទេ សូមព្យាយាមម្តងទៀត")
+            return
+
+        t = threading.Thread(
+            target=poll_deposit,
+            args=(uid, chat_id, amount, ref, public_user_label(user_obj)),
+            kwargs={"checker": camrapid_check},
+            daemon=True,
+        )
+        t.start()
+        return
+
+    # ---------- ABA → khpay.site ----------
     data = khpay_create(amount, ref_disp, method=method)
     if not data:
         _fail(f"❌ មិនអាចបង្កើត QR បានទេ ({method_label})\n\nមូលហេតុ:\n{_last_khpay_error[:180]}")
@@ -1898,22 +1946,7 @@ def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🔗 បើកទំព័រទូទាត់", url=payment_url))
 
-    caption = (
-        f"💰 Deposit <b>${amount:.2f}</b>\n💳 វិធីទូទាត់: <b>{method_label}</b>\n🔖 <code>{ref_disp}</code>\n\n"
-        f"📱 សូម Scan QR ខាងក្រោម (ឬចុចប៊ូតុងទំព័រទូទាត់) ដើម្បីបញ្ចូលលុយចូល Wallet\n"
-        f"✅ ប្រព័ន្ធនឹង detect ស្វ័យប្រវត្តិ\n⏳ QR ផុតកំណត់ក្នុង ~5-10 នាទី"
-    )
-
-    photo = None
-    if method == "bakong":
-        qr_string = data.get("qr", "")
-        img_buf = build_qr_image(
-            qr_string, amount=amount, ref=ref_disp,
-            label="Wallet Top-Up", subtitle=f"{STORE_NAME} · Bakong KHQR",
-        ) if qr_string else None
-        photo = img_buf or download_qr or None
-    else:
-        photo = download_qr or None
+    photo = download_qr or None
 
     if photo:
         bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
