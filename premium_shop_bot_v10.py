@@ -16,7 +16,10 @@ Kairozen Premium Account Shop Bot
   KHPAY_API_KEY         - API key របស់ https://khpay.site (ចាំបាច់សម្រាប់ deposit តាម ABA ប៉ុណ្ណោះ)
                           យកបាននៅ https://www.khpay.site/dashboard/settings
 
-ចំណាំ (v11): Bakong KHQR deposit → CamRapidPay | ABA deposit → khpay.site
+  KHQRCC_PROFILE_ID    - Profile ID របស់ https://khqr.cc (ក្នុង URL /api/{profileId}/...)
+  KHQRCC_SECRET_KEY    - Secret key របស់ https://khqr.cc (សម្រាប់គណនា sha1 hash)
+
+ចំណាំ (v12): Bakong KHQR deposit → CamRapidPay | ABA deposit → khqr.cc (ជំនួស khpay.site)
 """
 
 import os
@@ -25,7 +28,9 @@ import io
 import html
 import json
 import time
+import uuid
 import hashlib
+import urllib.parse
 import threading
 import requests
 import telebot
@@ -44,6 +49,14 @@ CAMRAPID_CHECK = os.environ.get("CAMRAPID_CHECK_URL", "https://pay.camrapidpay.c
 # https://www.khpay.site/dashboard/settings ដាក់ក្នុង Render Env Var ឈ្មោះ KHPAY_API_KEY
 KHPAY_API_KEY = os.environ.get("KHPAY_API_KEY", "")
 KHPAY_BASE_URL = os.environ.get("KHPAY_BASE_URL", "https://khpay.site/api/v1")
+# khqr.cc — ជំនួស khpay.site សម្រាប់ ABA deposit (redirect/hosted-checkout flow)
+KHQRCC_PROFILE_ID = os.environ.get("KHQRCC_PROFILE_ID", "")
+KHQRCC_SECRET_KEY = os.environ.get("KHQRCC_SECRET_KEY", "")
+KHQRCC_REQUEST_URL = os.environ.get("KHQRCC_REQUEST_URL", "https://khqr.cc/api/payment/request")
+KHQRCC_CHECK_URL_TMPL = os.environ.get(
+    "KHQRCC_CHECK_URL_TMPL",
+    "https://khqr.cc/api/{profile_id}/payment-gateway/v1/payments/check-transv2-khqrcc",
+)
 # Render ដាក់ RENDER_EXTERNAL_URL ស្វ័យប្រវត្តិ (ឧ. https://your-app.onrender.com)។
 # បើគ្មាន អាចកំណត់ PUBLIC_BASE_URL ដោយដៃ។ ត្រូវការសម្រាប់ webhook_url ដែល CamRapidPay តម្រូវ។
 PUBLIC_BASE_URL = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_BASE_URL", "")
@@ -653,7 +666,14 @@ def khpay_create(amount, note, method="aba", _attempt=1):
             return None
         if data.get("success"):
             return data.get("data") or {}
-        _last_khpay_error = f"HTTP {r.status_code}: {data}"
+        if data.get("cloudflare_error"):
+            # khpay.site (origin) ដួល/overloaded — Cloudflare ខ្លួនឯងប្រាប់ retry_after
+            _last_khpay_error = (
+                f"khpay.site origin server ដួល/overloaded ({data.get('error_name', 'bad_gateway')}) — "
+                f"សូមព្យាយាមម្តងទៀតក្រោយ {data.get('retry_after', 60)} វិនាទី ឬប្រើ Bakong ជំនួស"
+            )
+        else:
+            _last_khpay_error = f"HTTP {r.status_code}: {data}"
         print(f"[khpay_create] failed: {_last_khpay_error}", flush=True)
         if r.status_code >= 500 and _attempt < 2:
             time.sleep(1.5)
@@ -683,6 +703,133 @@ def khpay_check(transaction_id):
         return bool(data.get("success")) and bool(data.get("data", {}).get("paid"))
     except Exception as e:
         print(f"[khpay_check] error: {e}")
+    return False
+
+
+# ------------------------------------------------------------------
+# KHQR.CC — ជំនួស khpay.site សម្រាប់ ABA deposit
+# ជា hosted-checkout / redirect flow (មិនមែន JSON API ដែល return QR string ផ្ទាល់ទេ) —
+# ត្រូវផ្ញើ link ឲ្យ user បើកទំព័រទូទាត់ ហើយ poll check-trans endpoint ដើម្បីដឹងស្ថានភាព។
+# ------------------------------------------------------------------
+_last_khqrcc_error = ""
+
+
+KHQRCC_QR_API_URL_TMPL = os.environ.get(
+    "KHQRCC_QR_API_URL_TMPL",
+    "https://khqr.cc/api/{profile_id}/payment-gateway/v1/payments/qr-api",
+)
+
+
+def _khqrcc_find_field(d, keys):
+    """ស្វែងរក field មួយក្នុងចំណោមឈ្មោះជាទីគាំទ្រច្រើន (khqr.cc មិនទាន់មាន docs
+    ច្បាស់លាស់សម្រាប់ response field name ទេ) — ស្វែងទាំង top-level និងក្នុង d['data']"""
+    if not isinstance(d, dict):
+        return None
+    for k in keys:
+        if d.get(k):
+            return d[k]
+    inner = d.get("data")
+    if isinstance(inner, dict):
+        for k in keys:
+            if inner.get(k):
+                return inner[k]
+    return None
+
+
+def khqrcc_create(amount, note="", success_url=""):
+    """បង្កើត QR ដោយផ្ទាល់តាម khqr.cc /payment-gateway/v1/payments/qr-api (JSON API)
+    hash = sha1(secret + transaction_id + amount + success_url + remark)
+    return dict {transaction_id, qr_string (EMV string ប្រសិនមាន), qr_image_url, payment_url} ឬ None"""
+    global _last_khqrcc_error
+    if not KHQRCC_PROFILE_ID or not KHQRCC_SECRET_KEY:
+        _last_khqrcc_error = "KHQRCC_PROFILE_ID / KHQRCC_SECRET_KEY មិនបានកំណត់ក្នុង Render environment variables"
+        print(f"[khqrcc_create] {_last_khqrcc_error}", flush=True)
+        return None
+    txn_id = f"KZ{int(time.time())}{uuid.uuid4().hex[:6]}"
+    amount_str = f"{float(amount):.2f}"
+    success_url = success_url or "https://t.me/"
+    remark = note or ""
+    raw_string = f"{KHQRCC_SECRET_KEY}{txn_id}{amount_str}{success_url}{remark}"
+    sig = hashlib.sha1(raw_string.encode()).hexdigest()
+    payload = {
+        "transaction_id": txn_id,
+        "amount": amount_str,
+        "success_url": success_url,
+        "remark": remark,
+        "hash": sig,
+    }
+    url = KHQRCC_QR_API_URL_TMPL.format(profile_id=KHQRCC_PROFILE_ID)
+    try:
+        r = _http.post(
+            url,
+            data=payload,
+            headers={"Accept": "application/json"},
+            timeout=20,
+        )
+        try:
+            data = r.json()
+        except Exception:
+            _last_khqrcc_error = f"HTTP {r.status_code} (non-JSON): {r.text[:300]}"
+            print(f"[khqrcc_create] {_last_khqrcc_error}", flush=True)
+            return None
+
+        # khqr.cc មិនទាន់មាន docs ច្បាស់សម្រាប់ field ឈ្មោះអ្វី — ព្យាយាមស្វែងរក
+        # ក្នុងចំណោមឈ្មោះទូទៅបំផុតដែល gateway ប្រភេទនេះតែងប្រើ
+        qr_string = _khqrcc_find_field(data, ["qr_string", "qr", "qr_code", "khqr", "emv"])
+        qr_image_url = _khqrcc_find_field(data, ["qr_image", "qr_image_url", "qrImage", "download_qr", "image_url"])
+        payment_url = _khqrcc_find_field(data, ["payment_url", "checkout_url", "url", "redirect_url"])
+        found_txn = _khqrcc_find_field(data, ["transaction_id", "txn_id", "transactionId"]) or txn_id
+
+        ok = data.get("responseCode") == 0 or data.get("success") is True or bool(qr_string or qr_image_url or payment_url)
+        if not ok:
+            _last_khqrcc_error = f"HTTP {r.status_code}: {json.dumps(data)[:400]}"
+            print(f"[khqrcc_create] failed: {_last_khqrcc_error}", flush=True)
+            return None
+
+        if not (qr_string or qr_image_url or payment_url):
+            # គ្មាន field ណាមួយត្រូវនឹងឈ្មោះដែលយើងទាយ — log raw response ពេញលេញ
+            # ដើម្បីអាចមើលឃើញរូបរាងពិតប្រាកដតាម /lastqrerror
+            _last_khqrcc_error = f"គ្មាន QR field ណាមួយត្រូវគ្នា — raw response: {json.dumps(data)[:500]}"
+            print(f"[khqrcc_create] {_last_khqrcc_error}", flush=True)
+            return None
+
+        return {
+            "transaction_id": found_txn,
+            "qr_string": qr_string,
+            "qr_image_url": qr_image_url,
+            "payment_url": payment_url,
+        }
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        _last_khqrcc_error = f"{type(e).__name__}: {e}"
+        print(f"[khqrcc_create] transient error: {_last_khqrcc_error}", flush=True)
+    except Exception as e:
+        _last_khqrcc_error = f"{type(e).__name__}: {e}"
+        print(f"[khqrcc_create] error: {_last_khqrcc_error}", flush=True)
+    return None
+
+
+def khqrcc_check(transaction_id):
+    """POST check-transv2-khqrcc → True ប្រសិនបើបានបង់។
+    hash = sha1(secret + transaction_id)"""
+    global _last_khqrcc_error
+    if not KHQRCC_PROFILE_ID or not KHQRCC_SECRET_KEY:
+        return False
+    url = KHQRCC_CHECK_URL_TMPL.format(profile_id=KHQRCC_PROFILE_ID)
+    sig = hashlib.sha1(f"{KHQRCC_SECRET_KEY}{transaction_id}".encode()).hexdigest()
+    try:
+        r = _http.post(
+            url,
+            data={"transaction_id": transaction_id, "hash": sig},
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
+        data = r.json()
+        if data.get("responseCode") == 0 and (data.get("data") or {}).get("status") == "success":
+            return True
+        return False
+    except Exception as e:
+        _last_khqrcc_error = f"{type(e).__name__}: {e}"
+        print(f"[khqrcc_check] error: {_last_khqrcc_error}", flush=True)
     return False
 
 
@@ -1931,22 +2078,31 @@ def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
         t.start()
         return
 
-    # ---------- ABA → khpay.site ----------
-    data = khpay_create(amount, ref_disp, method=method)
+    # ---------- ABA → khqr.cc (JSON qr-api) ----------
+    data = khqrcc_create(amount, note=ref_disp)
     if not data:
-        _fail(f"❌ មិនអាចបង្កើត QR បានទេ ({method_label})\n\nមូលហេតុ:\n{_last_khpay_error[:180]}")
+        _fail(
+            f"❌ មិនអាចបង្កើត QR បានទេ ({method_label})\n\n"
+            f"មូលហេតុ:\n{_last_khqrcc_error[:180]}\n\n"
+            f"💡 សាកល្បង '📱 ទូទាត់តាម Bakong' ជំនួសបានឥឡូវនេះ (ប្រើ provider ផ្សេង)"
+        )
         return
 
     txn_id = data.get("transaction_id", "")
+    qr_string = data.get("qr_string", "")
+    qr_image_url = data.get("qr_image_url", "")
     payment_url = data.get("payment_url", "")
-    download_qr = data.get("download_qr", "")
 
     kb = None
     if payment_url:
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🔗 បើកទំព័រទូទាត់", url=payment_url))
 
-    photo = download_qr or None
+    img_buf = build_qr_image(
+        qr_string, amount=amount, ref=ref_disp,
+        label="Wallet Top-Up", subtitle=f"{STORE_NAME} · ABA PayWay",
+    ) if qr_string else None
+    photo = img_buf or qr_image_url or None
 
     if photo:
         bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
@@ -1962,7 +2118,7 @@ def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
     t = threading.Thread(
         target=poll_deposit,
         args=(uid, chat_id, amount, txn_id, public_user_label(user_obj)),
-        kwargs={"checker": khpay_check},
+        kwargs={"checker": khqrcc_check},
         daemon=True,
     )
     t.start()
@@ -2365,10 +2521,12 @@ def cmd_lastqrerror(message):
     if not is_admin(message.from_user.id):
         return
     lines = []
+    if _last_khqrcc_error:
+        lines.append(f"🔎 <b>khqr.cc (ABA) error ចុងក្រោយ:</b>\n<code>{html.escape(_last_khqrcc_error)}</code>")
     if _last_khpay_error:
-        lines.append(f"🔎 <b>KHPAY (ABA/Bakong) error ចុងក្រោយ:</b>\n<code>{html.escape(_last_khpay_error)}</code>")
+        lines.append(f"🔎 <b>KHPAY (legacy) error ចុងក្រោយ:</b>\n<code>{html.escape(_last_khpay_error)}</code>")
     if _last_camrapid_error:
-        lines.append(f"🔎 <b>CamRapidPay error ចុងក្រោយ:</b>\n<code>{html.escape(_last_camrapid_error)}</code>")
+        lines.append(f"🔎 <b>CamRapidPay (Bakong) error ចុងក្រោយ:</b>\n<code>{html.escape(_last_camrapid_error)}</code>")
     bot.reply_to(message, "\n\n".join(lines) if lines else "✅ មិនទាន់មាន error QR ណាមួយកត់ត្រាទុកនៅឡើយទេ")
 
 
