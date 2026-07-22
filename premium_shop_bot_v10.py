@@ -692,7 +692,22 @@ def khpay_create(amount, note, method="aba", _attempt=1):
             time.sleep(wait_s)
             return khpay_create(amount, note, method, _attempt=_attempt + 1)
         if r.status_code >= 500 and _attempt < _KHPAY_MAX_ATTEMPTS:
-            time.sleep(_KHPAY_BACKOFF[_attempt - 1])
+            # ករណី Cloudflare/origin 5xx (ឧ. 502/503/504) — server ខ្លួនឯងអាចប្រាប់
+            # "retry_after" ក្នុង JSON body (Cloudflare error format) ដែលច្រើនតែវែងជាង
+            # backoff ដើម [2,5,10] របស់យើង។ គោរពតាមវាបើមាន (កំណត់ត្រឹម 60s កុំឲ្យរង់ចាំយូរពេក)
+            wait_s = _KHPAY_BACKOFF[_attempt - 1]
+            try:
+                server_wait = float(data.get("retry_after") or 0)
+                if server_wait > 0:
+                    # server ស្នើ retry_after វែង (ឧ. 60s) តែយើងកំពុង block ក្នុង
+                    # callback handler — cap ត្រឹម 10s ដើម្បីកុំឲ្យ callback_query
+                    # token ផុតកំណត់ (Telegram ~ផុតក្នុង ២៥-៣០វិ)។ បើត្រូវការរង់ចាំ
+                    # យូរជាងនេះមែន ប្រើប៊ូតុង "ព្យាយាមម្តងទៀត" វិញប្រសើរជាង
+                    wait_s = min(max(server_wait, wait_s), 10.0)
+            except (TypeError, ValueError):
+                pass
+            print(f"[khpay_create] retrying in {wait_s}s (attempt {_attempt + 1}/{_KHPAY_MAX_ATTEMPTS})", flush=True)
+            time.sleep(wait_s)
             return khpay_create(amount, note, method, _attempt=_attempt + 1)
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         _last_khpay_error = f"{type(e).__name__}: {e}"
