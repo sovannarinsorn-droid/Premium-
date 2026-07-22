@@ -648,7 +648,11 @@ def khpay_create(amount, note, method="aba", _attempt=1):
         print(f"[khpay_create] {_last_khpay_error}", flush=True)
         return None
     endpoint = "/bakong/generate" if method == "bakong" else "/qr/generate"
-    idem_key = f"kz-{method}-{hashlib.md5(f'{note}:{amount}'.encode()).hexdigest()[:24]}"
+    base_key = f"kz-{method}-{hashlib.md5(f'{note}:{amount}'.encode()).hexdigest()[:24]}"
+    # attempt ១ ប្រើ key សុទ្ធ (ការពារ double-charge បើ client timeout ធម្មតា);
+    # attempt ២+ ប្តូរ key (បន្ថែម attempt suffix) ដើម្បីកុំឱ្យជាប់គាំងក្រោយ request
+    # ដើមដែលអាចជាប់ lock យូរ (ឧ. ABA PayWay ខាងក្រោមកំពុងគាំង/យឺតខ្លាំង)
+    idem_key = base_key if _attempt == 1 else f"{base_key}-r{_attempt}"
     try:
         r = _http.post(
             f"{KHPAY_BASE_URL}{endpoint}",
@@ -674,14 +678,17 @@ def khpay_create(amount, note, method="aba", _attempt=1):
             return data.get("data") or {}
         _last_khpay_error = f"HTTP {r.status_code}: {data}"
         print(f"[khpay_create] failed: {_last_khpay_error}", flush=True)
-        # 409 = Idempotency-Key conflict/race (server ប្រាប់ Retry-After ថាកំពុង process
-        # request ដើមនៅឡើយ), 429 = rate limited → docs ណែនាំ retry តាម Retry-After header
-        if r.status_code in (409, 429) and _attempt < _KHPAY_MAX_ATTEMPTS:
+        if r.status_code == 409 and _attempt < _KHPAY_MAX_ATTEMPTS:
+            # key ត្រូវប្តូរស្រាប់នៅ attempt បន្ទាប់ (មើលខាងលើ) ដូច្នេះមិនចាំបាច់រង់ចាំ
+            # តាម Retry-After ចាស់ (វានោះសម្រាប់ key ដើមដែលយើងលែងប្រើហើយ)
+            time.sleep(1.0)
+            return khpay_create(amount, note, method, _attempt=_attempt + 1)
+        if r.status_code == 429 and _attempt < _KHPAY_MAX_ATTEMPTS:
             try:
                 wait_s = float(r.headers.get("Retry-After", "2"))
             except (TypeError, ValueError):
                 wait_s = 2.0
-            wait_s = min(max(wait_s, 1.0), 15.0)  # kept sane bounds
+            wait_s = min(max(wait_s, 1.0), 15.0)
             time.sleep(wait_s)
             return khpay_create(amount, note, method, _attempt=_attempt + 1)
         if r.status_code >= 500 and _attempt < _KHPAY_MAX_ATTEMPTS:
