@@ -1979,6 +1979,7 @@ def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
 
     txn_id = data.get("transaction_id", "")
     payment_url = data.get("payment_url", "")
+    qr_string = data.get("qr_string", "")
     download_qr = data.get("download_qr", "")
 
     kb = None
@@ -1986,15 +1987,34 @@ def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🔗 បើកទំព័រទូទាត់", url=payment_url))
 
-    photo = download_qr or None
+    # ជម្រើសទី១៖ build QR image ដោយខ្លួនឯងពី qr_string (មិនអាស្រ័យលើ
+    # download_qr URL ដែលអាចទាមទារ Authorization header ដែល Telegram
+    # server មិនដឹង — នេះជាហេតុផលចម្បងដែល QR មិនចេញ)
+    photo = None
+    if qr_string:
+        photo = build_qr_image(
+            qr_string, amount=amount, ref=ref_disp,
+            label="Wallet Top-Up", subtitle=f"{STORE_NAME} · ABA PayWay",
+        )
 
-    if photo:
-        bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
-    elif payment_url:
-        bot.send_message(chat_id, caption, reply_markup=kb)
-    else:
-        _fail("❌ គ្មានទិន្នន័យ QR ត្រឡប់មកទេ សូមព្យាយាមម្តងទៀត")
-        return
+    try:
+        if photo:
+            bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
+        elif download_qr:
+            # fallback ចាស់៖ សាកល្បងទាញរូបផ្ទាល់ពី khpay.site
+            bot.send_photo(chat_id, download_qr, caption=caption, reply_markup=kb)
+        elif payment_url:
+            bot.send_message(chat_id, caption, reply_markup=kb)
+        else:
+            _fail("❌ គ្មានទិន្នន័យ QR ត្រឡប់មកទេ សូមព្យាយាមម្តងទៀត")
+            return
+    except Exception as e:
+        print(f"[handle_deposit][ABA] send_photo failed: {e}", flush=True)
+        if payment_url:
+            bot.send_message(chat_id, caption, reply_markup=kb)
+        else:
+            _fail(f"❌ មិនអាចផ្ញើ QR image បានទេ: {e}")
+            return
 
     if not txn_id:
         return
