@@ -11,12 +11,10 @@ Kairozen Premium Account Shop Bot
 ត្រូវការ Environment Variables:
   BOT_TOKEN            - Telegram Bot Token
   ADMIN_ID             - Telegram user id របស់ admin (លេខ)
-  CAMRAPIDPAY_API_KEY  - API key របស់ CamRapidPay (ចាំបាច់សម្រាប់ deposit តាម Bakong KHQR)
-  CAMRAPID_CREATE_URL / CAMRAPID_CHECK_URL / PUBLIC_BASE_URL - កំណត់ webhook_url សម្រាប់ CamRapidPay
-  KHPAY_API_KEY         - API key របស់ https://khpay.site (ចាំបាច់សម្រាប់ deposit តាម ABA ប៉ុណ្ណោះ)
+  CAMRAPIDPAY_API_KEY  - API key របស់ CamRapidPay
+  CAMRAPIDPAY_BASE_URL - (default: https://api.camrapidpay.com) កែតាមឯកសារពិត
+  KHPAY_API_KEY         - API key របស់ https://khpay.site (ចាំបាច់សម្រាប់ deposit តាម ABA/Bakong)
                           យកបាននៅ https://www.khpay.site/dashboard/settings
-
-ចំណាំ (v11): Bakong KHQR deposit → CamRapidPay | ABA deposit → khpay.site
 """
 
 import os
@@ -183,13 +181,6 @@ EMOJI_CATEGORIES = [
     ("🔎", "🔎 ស្វែងរក/Debug"),
     ("✨", "✨ ការណែនាំ/Tips"),
     ("🙏", "🙏 អរគុណ"),
-    ("🤖", "🤖 ChatGPT (icon product)"),
-    ("🎬", "🎬 Netflix (icon product)"),
-    ("🎧", "🎧 Spotify (icon product)"),
-    ("📘", "📘 Office 365 (icon product)"),
-    ("🎨", "🎨 Canva (icon product)"),
-    ("🏦", "🏦 ធនាគារ/ABA"),
-    ("★", "★ Premium badge"),
 ]
 
 
@@ -628,31 +619,16 @@ def camrapid_check(reference):
 _last_khpay_error = ""  # debug: error/response ចុងក្រោយពី khpay.site
 
 
-_KHPAY_MAX_ATTEMPTS = 4
-_KHPAY_BACKOFF = [2, 5, 10]  # វិនាទីរង់ចាំមុន attempt ទី 2/3/4 (សម្រាប់ 5xx/timeout)
-
-
 def khpay_create(amount, note, method="aba", _attempt=1):
     """POST ទៅ khpay.site ដើម្បីបង្កើត QR ទូទាត់។
     method: "aba" -> POST /qr/generate (ABA PayWay) | "bakong" -> POST /bakong/generate (Bakong KHQR)
-    return dict (resp["data"]) ឬ None
-
-    ចំណាំ: 502/503/504 = khpay.site docs កំណត់ថា "upstream (ABA PayWay) unreachable/
-    overloaded — safe to retry" ដូច្នេះ retry ជាមួយ backoff វែងជាង 1.5s ដើម។
-    ប្រើ Idempotency-Key ស្ថិតស្ថេរ (ផ្អែកលើ note+amount) ដើម្បីកុំឱ្យ retry បង្កើត QR/
-    ចំណាយ ABA quota ស្ទួន បើ khpay.site ការពិតបានដំណើរការ request ដើមរួចហើយ តែ
-    connection គាំង/timeout មុនឆ្លើយតប។"""
+    return dict (resp["data"]) ឬ None"""
     global _last_khpay_error
     if not KHPAY_API_KEY:
         _last_khpay_error = "KHPAY_API_KEY មិនបានកំណត់ក្នុង Render environment variables"
         print(f"[khpay_create] {_last_khpay_error}", flush=True)
         return None
     endpoint = "/bakong/generate" if method == "bakong" else "/qr/generate"
-    base_key = f"kz-{method}-{hashlib.md5(f'{note}:{amount}'.encode()).hexdigest()[:24]}"
-    # attempt ១ ប្រើ key សុទ្ធ (ការពារ double-charge បើ client timeout ធម្មតា);
-    # attempt ២+ ប្តូរ key (បន្ថែម attempt suffix) ដើម្បីកុំឱ្យជាប់គាំងក្រោយ request
-    # ដើមដែលអាចជាប់ lock យូរ (ឧ. ABA PayWay ខាងក្រោមកំពុងគាំង/យឺតខ្លាំង)
-    idem_key = base_key if _attempt == 1 else f"{base_key}-r{_attempt}"
     try:
         r = _http.post(
             f"{KHPAY_BASE_URL}{endpoint}",
@@ -661,7 +637,6 @@ def khpay_create(amount, note, method="aba", _attempt=1):
                 "Authorization": f"Bearer {KHPAY_API_KEY}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "Idempotency-Key": idem_key,
             },
             timeout=20,
         )
@@ -670,51 +645,23 @@ def khpay_create(amount, note, method="aba", _attempt=1):
         except Exception:
             _last_khpay_error = f"HTTP {r.status_code} (non-JSON): {r.text[:300]}"
             print(f"[khpay_create] {_last_khpay_error}", flush=True)
-            if r.status_code >= 500 and _attempt < _KHPAY_MAX_ATTEMPTS:
-                time.sleep(_KHPAY_BACKOFF[_attempt - 1])
-                return khpay_create(amount, note, method, _attempt=_attempt + 1)
+            if r.status_code >= 500 and _attempt < 2:
+                time.sleep(1.5)
+                return khpay_create(amount, note, method, _attempt=2)
             return None
         if data.get("success"):
             return data.get("data") or {}
         _last_khpay_error = f"HTTP {r.status_code}: {data}"
         print(f"[khpay_create] failed: {_last_khpay_error}", flush=True)
-        if r.status_code == 409 and _attempt < _KHPAY_MAX_ATTEMPTS:
-            # key ត្រូវប្តូរស្រាប់នៅ attempt បន្ទាប់ (មើលខាងលើ) ដូច្នេះមិនចាំបាច់រង់ចាំ
-            # តាម Retry-After ចាស់ (វានោះសម្រាប់ key ដើមដែលយើងលែងប្រើហើយ)
-            time.sleep(1.0)
-            return khpay_create(amount, note, method, _attempt=_attempt + 1)
-        if r.status_code == 429 and _attempt < _KHPAY_MAX_ATTEMPTS:
-            try:
-                wait_s = float(r.headers.get("Retry-After", "2"))
-            except (TypeError, ValueError):
-                wait_s = 2.0
-            wait_s = min(max(wait_s, 1.0), 15.0)
-            time.sleep(wait_s)
-            return khpay_create(amount, note, method, _attempt=_attempt + 1)
-        if r.status_code >= 500 and _attempt < _KHPAY_MAX_ATTEMPTS:
-            # ករណី Cloudflare/origin 5xx (ឧ. 502/503/504) — server ខ្លួនឯងអាចប្រាប់
-            # "retry_after" ក្នុង JSON body (Cloudflare error format) ដែលច្រើនតែវែងជាង
-            # backoff ដើម [2,5,10] របស់យើង។ គោរពតាមវាបើមាន (កំណត់ត្រឹម 60s កុំឲ្យរង់ចាំយូរពេក)
-            wait_s = _KHPAY_BACKOFF[_attempt - 1]
-            try:
-                server_wait = float(data.get("retry_after") or 0)
-                if server_wait > 0:
-                    # server ស្នើ retry_after វែង (ឧ. 60s) តែយើងកំពុង block ក្នុង
-                    # callback handler — cap ត្រឹម 10s ដើម្បីកុំឲ្យ callback_query
-                    # token ផុតកំណត់ (Telegram ~ផុតក្នុង ២៥-៣០វិ)។ បើត្រូវការរង់ចាំ
-                    # យូរជាងនេះមែន ប្រើប៊ូតុង "ព្យាយាមម្តងទៀត" វិញប្រសើរជាង
-                    wait_s = min(max(server_wait, wait_s), 10.0)
-            except (TypeError, ValueError):
-                pass
-            print(f"[khpay_create] retrying in {wait_s}s (attempt {_attempt + 1}/{_KHPAY_MAX_ATTEMPTS})", flush=True)
-            time.sleep(wait_s)
-            return khpay_create(amount, note, method, _attempt=_attempt + 1)
+        if r.status_code >= 500 and _attempt < 2:
+            time.sleep(1.5)
+            return khpay_create(amount, note, method, _attempt=2)
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         _last_khpay_error = f"{type(e).__name__}: {e}"
         print(f"[khpay_create] transient error: {_last_khpay_error}", flush=True)
-        if _attempt < _KHPAY_MAX_ATTEMPTS:
-            time.sleep(_KHPAY_BACKOFF[_attempt - 1])
-            return khpay_create(amount, note, method, _attempt=_attempt + 1)
+        if _attempt < 2:
+            time.sleep(1.5)
+            return khpay_create(amount, note, method, _attempt=2)
     except Exception as e:
         _last_khpay_error = f"{type(e).__name__}: {e}"
         print(f"[khpay_create] error: {_last_khpay_error}", flush=True)
@@ -1925,68 +1872,18 @@ def handle_buy_wallet(call, product_key, qty=1):
 
 
 def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
-    """method: "aba"    -> ABA PayWay QR (khpay.site /qr/generate)
-               "bakong" -> Bakong KHQR (CamRapidPay) — តាមការកំណត់ថ្មី៖
-               Bakong ប្រើ CamRapidPay, ឯ ABA នៅតែប្រើ khpay.site ដដែល។"""
+    """method: "aba" -> ABA PayWay QR (khpay.site /qr/generate)
+               "bakong" -> Bakong KHQR (khpay.site /bakong/generate)"""
     def _fail(err_text):
         if call:
             bot.answer_callback_query(call.id, err_text, show_alert=True)
-        retry_prefix = "paym_bkq_" if method == "bakong" else "paym_aba_"
-        retry_kb = types.InlineKeyboardMarkup()
-        retry_kb.add(types.InlineKeyboardButton(
-            "🔁 ព្យាយាមម្តងទៀត", callback_data=f"{retry_prefix}{amount}"
-        ))
-        bot.send_message(chat_id, f"{err_text}\n\nសូមព្យាយាមម្តងទៀត បើ error នៅតែកើតឡើង ជា server ខាង gateway ខ្លួនឯងគាំង (មិនមែនកូដឯង)។", reply_markup=retry_kb)
+        else:
+            bot.send_message(chat_id, err_text)
 
     ref = f"KZDEP{uid}{int(time.time())}"[:50]
     ref_disp = f"DEP-{hashlib.md5(ref.encode()).hexdigest()[:8].upper()}"
     method_label = "ABA" if method == "aba" else "Bakong KHQR"
 
-    caption = (
-        f"💰 Deposit <b>${amount:.2f}</b>\n💳 វិធីទូទាត់: <b>{method_label}</b>\n🔖 <code>{ref_disp}</code>\n\n"
-        f"📱 សូម Scan QR ខាងក្រោម (ឬចុចប៊ូតុងទំព័រទូទាត់) ដើម្បីបញ្ចូលលុយចូល Wallet\n"
-        f"✅ ប្រព័ន្ធនឹង detect ស្វ័យប្រវត្តិ\n⏳ QR ផុតកំណត់ក្នុង ~5-10 នាទី"
-    )
-
-    # ---------- BAKONG → CamRapidPay ----------
-    if method == "bakong":
-        data = camrapid_create(amount, ref)
-        if not data:
-            _fail(f"❌ មិនអាចបង្កើត QR បានទេ ({method_label})\n\nមូលហេតុ:\n{_last_camrapid_error[:180]}")
-            return
-
-        qr_string = data.get("qr_code", "")
-        payment_url = data.get("payment_url", "")
-
-        kb = None
-        if payment_url:
-            kb = types.InlineKeyboardMarkup()
-            kb.add(types.InlineKeyboardButton("🔗 បើកទំព័រទូទាត់", url=payment_url))
-
-        img_buf = build_qr_image(
-            qr_string, amount=amount, ref=ref_disp,
-            label="Wallet Top-Up", subtitle=f"{STORE_NAME} · Bakong KHQR",
-        ) if qr_string else None
-        photo = img_buf or None
-
-        if photo:
-            bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
-        elif payment_url:
-            bot.send_message(chat_id, caption, reply_markup=kb)
-        else:
-            _fail("❌ គ្មានទិន្នន័យ QR ត្រឡប់មកទេ សូមព្យាយាមម្តងទៀត")
-            return
-
-        t = threading.Thread(
-            target=poll_deposit,
-            args=(uid, chat_id, amount, ref, public_user_label(user_obj)),
-            kwargs={"checker": camrapid_check},
-            daemon=True,
-        )
-        t.start()
-        return
-
-    # ---------- ABA → khpay.site ----------
     data = khpay_create(amount, ref_disp, method=method)
     if not data:
         _fail(f"❌ មិនអាចបង្កើត QR បានទេ ({method_label})\n\nមូលហេតុ:\n{_last_khpay_error[:180]}")
@@ -1994,7 +1891,6 @@ def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
 
     txn_id = data.get("transaction_id", "")
     payment_url = data.get("payment_url", "")
-    qr_string = data.get("qr_string", "")
     download_qr = data.get("download_qr", "")
 
     kb = None
@@ -2002,34 +1898,30 @@ def handle_deposit(uid, chat_id, amount, user_obj, method="aba", call=None):
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🔗 បើកទំព័រទូទាត់", url=payment_url))
 
-    # ជម្រើសទី១៖ build QR image ដោយខ្លួនឯងពី qr_string (មិនអាស្រ័យលើ
-    # download_qr URL ដែលអាចទាមទារ Authorization header ដែល Telegram
-    # server មិនដឹង — នេះជាហេតុផលចម្បងដែល QR មិនចេញ)
-    photo = None
-    if qr_string:
-        photo = build_qr_image(
-            qr_string, amount=amount, ref=ref_disp,
-            label="Wallet Top-Up", subtitle=f"{STORE_NAME} · ABA PayWay",
-        )
+    caption = (
+        f"💰 Deposit <b>${amount:.2f}</b>\n💳 វិធីទូទាត់: <b>{method_label}</b>\n🔖 <code>{ref_disp}</code>\n\n"
+        f"📱 សូម Scan QR ខាងក្រោម (ឬចុចប៊ូតុងទំព័រទូទាត់) ដើម្បីបញ្ចូលលុយចូល Wallet\n"
+        f"✅ ប្រព័ន្ធនឹង detect ស្វ័យប្រវត្តិ\n⏳ QR ផុតកំណត់ក្នុង ~5-10 នាទី"
+    )
 
-    try:
-        if photo:
-            bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
-        elif download_qr:
-            # fallback ចាស់៖ សាកល្បងទាញរូបផ្ទាល់ពី khpay.site
-            bot.send_photo(chat_id, download_qr, caption=caption, reply_markup=kb)
-        elif payment_url:
-            bot.send_message(chat_id, caption, reply_markup=kb)
-        else:
-            _fail("❌ គ្មានទិន្នន័យ QR ត្រឡប់មកទេ សូមព្យាយាមម្តងទៀត")
-            return
-    except Exception as e:
-        print(f"[handle_deposit][ABA] send_photo failed: {e}", flush=True)
-        if payment_url:
-            bot.send_message(chat_id, caption, reply_markup=kb)
-        else:
-            _fail(f"❌ មិនអាចផ្ញើ QR image បានទេ: {e}")
-            return
+    photo = None
+    if method == "bakong":
+        qr_string = data.get("qr", "")
+        img_buf = build_qr_image(
+            qr_string, amount=amount, ref=ref_disp,
+            label="Wallet Top-Up", subtitle=f"{STORE_NAME} · Bakong KHQR",
+        ) if qr_string else None
+        photo = img_buf or download_qr or None
+    else:
+        photo = download_qr or None
+
+    if photo:
+        bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
+    elif payment_url:
+        bot.send_message(chat_id, caption, reply_markup=kb)
+    else:
+        _fail("❌ គ្មានទិន្នន័យ QR ត្រឡប់មកទេ សូមព្យាយាមម្តងទៀត")
+        return
 
     if not txn_id:
         return
