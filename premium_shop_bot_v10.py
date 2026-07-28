@@ -15,6 +15,9 @@ Kairozen Premium Account Shop Bot
   CAMRAPID_CREATE_URL / CAMRAPID_CHECK_URL / PUBLIC_BASE_URL - កំណត់ webhook_url សម្រាប់ CamRapidPay
 
 ចំណាំ (v12): បានលុបជម្រើសទូទាត់តាម ABA (khpay.site) ចេញ — Deposit ទាំងអស់ប្រើ Bakong KHQR (CamRapidPay) ជាតែមួយ
+ចំណាំ (v11): បន្ថែម 🤖 ជាវ Bot ផ្ទាល់ខ្លួន — user បំពេញ Bakong ID → Admin បំពេញ Token ដោយដៃ
+  (/subs មើលសំណើរង់ចាំ, /activatesub user_id|token ជា fallback)។ បើ user គ្មាន Bakong ID
+  Admin ត្រូវទាក់ទងផ្ទាល់ ដើម្បីរៀបចំ QR និងបញ្ចូលលុយដោយដៃ (/addbalance)។
 """
 
 import os
@@ -80,6 +83,9 @@ USERS_FILE = os.path.join(DATA_DIR, "users.json")
 PRODUCTS_FILE = os.path.join(DATA_DIR, "products.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "orders.json")
 EMOJI_FILE = os.path.join(DATA_DIR, "premium_emoji.json")
+SUBS_FILE = os.path.join(DATA_DIR, "subscriptions.json")
+# តម្លៃជាវ Bot ផ្ទាល់ខ្លួន (Bot Rental) ក្នុងមួយខែ (USD) — កែបានតាម Env Var
+BOT_SUBSCRIPTION_PRICE = float(os.environ.get("BOT_SUBSCRIPTION_PRICE", "15"))
 
 os.makedirs(STOCK_DIR, exist_ok=True)
 
@@ -388,6 +394,40 @@ def load_orders():
 
 def save_orders(d):
     _save(ORDERS_FILE, d)
+
+
+# ------------------------------------------------------------------
+# BOT SUBSCRIPTION (ការជាវ Bot ផ្ទាល់ខ្លួន) — manual admin approval flow
+# ------------------------------------------------------------------
+# រចនាសម្ព័ន្ធ record មួយក្នុង SUBS_FILE (key = str(uid)):
+#   {
+#     "status": "waiting_admin_token" | "active" | "no_bakong_manual",
+#     "bakong_id": "<Bakong ID ដែល user បំពេញ>" ឬ None,
+#     "token": "<Token ដែល admin បំពេញ>" ឬ None,
+#     "requested_at": "<timestamp text>",
+#     "activated_at": "<timestamp text>" ឬ None,
+#   }
+def load_subs():
+    return _load(SUBS_FILE, {})
+
+
+def save_subs(d):
+    _save(SUBS_FILE, d)
+
+
+def get_sub(uid):
+    subs = load_subs()
+    return subs.get(str(uid))
+
+
+def set_sub(uid, **fields):
+    with _lock:
+        subs = load_subs()
+        rec = subs.get(str(uid), {})
+        rec.update(fields)
+        subs[str(uid)] = rec
+        save_subs(subs)
+        return rec
 
 
 def get_user(uid):
@@ -931,6 +971,7 @@ def products_kb():
             label = f"× {icon} {p['name'].upper()} - អស់ស្តុក"
             btn = pbtn(label, callback_data=f"nostock_{key}", style="danger")
         kb.add(btn)
+    kb.add(pbtn(BTN_SUBSCRIBE, callback_data="menu_subscribe"))
     kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="back_main"))
     return kb
 
@@ -1008,6 +1049,7 @@ BTN_DEPOSIT = "➕ បញ្ចូលលុយ"
 BTN_ORDERS = "📦 ការកម្មង់"
 BTN_REFERRAL = "🔗 ណែនាំមិត្ត"
 BTN_HELP = "☎️ ជួយខ្ញុំផង"
+BTN_SUBSCRIBE = "🤖 ជាវ Bot ផ្ទាល់ខ្លួន"
 
 ADMIN_BTN_STATS = "📊 ស្ថិតិ"
 ADMIN_BTN_ADDPRODUCT = "➕ Product ថ្មី"
@@ -1093,6 +1135,7 @@ def cmd_start(message):
         f"💰 <b>Wallet</b> — មើលសមតុល្យ និងប្រវត្តិកម្មង់\n"
         f"📦 <b>ការកម្មង់</b> — មើល account ដែលធ្លាប់ទិញរួច\n"
         f"🔗 <b>ណែនាំមិត្ត</b> — ចែក link ថែមចំណូល {REFERRAL_PERCENT:.0f}% រៀងរហូត\n"
+        f"🤖 <b>ជាវ Bot ផ្ទាល់ខ្លួន</b> — ជួល Bot ផ្ទាល់ខ្លួន ${BOT_SUBSCRIPTION_PRICE:.2f}/ខែ\n"
         f"☎️ <b>ជួយខ្ញុំផង</b> — ជជែកផ្ទាល់ជាមួយ Admin\n\n"
         f"✨ <i>ព័ត៌មានជំនួយ:</i> ត្រូវបញ្ចូលលុយចូល Wallet សិន រួចជ្រើសរើសទិញបាន — account ផ្ញើមកភ្លាមៗដោយស្វ័យប្រវត្តិ!\n"
         f"🙏 អរគុណដែលទុកចិត្ត {STORE_NAME}"
@@ -1184,6 +1227,95 @@ def referral_info_text(uid):
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_REFERRAL))
 def reply_referral(message):
     bot.send_message(message.chat.id, referral_info_text(message.from_user.id))
+
+
+def subscribe_intro_text():
+    return (
+        f"🤖 <b>ជាវ Bot ផ្ទាល់ខ្លួន</b>\n\n"
+        f"ជួល Bot ផ្ទាល់ខ្លួន (brand ផ្ទាល់ខ្លួន) ក្នុងតម្លៃ <b>${BOT_SUBSCRIPTION_PRICE:.2f}/ខែ</b>។\n\n"
+        f"តើអ្នកមាន <b>Bakong ID</b> ផ្ទាល់ខ្លួនរួចហើយឬទេ?\n"
+        f"• មាន → បំពេញ Bakong ID ដើម្បីឲ្យ Admin រៀបចំ Token ជូន\n"
+        f"• អត់មាន → Admin នឹងទាក់ទងផ្ទាល់ដើម្បីរៀបចំការទូទាត់ QR ដោយដៃ"
+    )
+
+
+def subscribe_choice_kb():
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(pbtn("✅ មាន Bakong ID", callback_data="sub_yes", style="success"))
+    kb.add(pbtn("❌ អត់មាន Bakong ID", callback_data="sub_no"))
+    kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="back_main"))
+    return kb
+
+
+@bot.message_handler(commands=["subscribe"])
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_SUBSCRIBE))
+def reply_subscribe(message):
+    bot.send_message(message.chat.id, subscribe_intro_text(), reply_markup=subscribe_choice_kb())
+
+
+def subscribe_bakong_id_step(message, from_user):
+    """ទទួល Bakong ID ពី user (បន្ទាប់ពីចុច 'មាន Bakong ID') → រក្សាទុក ស្ថានភាព
+    'waiting_admin_token' ហើយជូនដំណឹង Admin ដោយផ្ទាល់ព្រមទាំងប៊ូតុងបំពេញ Token។"""
+    uid = from_user.id
+    chat_id = message.chat.id
+    bakong_id = (message.text or "").strip()
+    if not bakong_id or bakong_id.startswith("/"):
+        bot.send_message(chat_id, "❌ Bakong ID មិនត្រឹមត្រូវទេ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត")
+        return
+    set_sub(
+        uid,
+        status="waiting_admin_token",
+        bakong_id=bakong_id,
+        token=None,
+        requested_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        activated_at=None,
+    )
+    bot.send_message(
+        chat_id,
+        "✅ បានទទួល Bakong ID របស់អ្នករួចហើយ។\n"
+        "⏳ សូមរង់ចាំ Admin ដំណើរការ Token ជូន — bot នឹងផ្ញើ Token មកអ្នកភ្លាមៗពេលរួចរាល់។",
+    )
+    admin_kb = types.InlineKeyboardMarkup()
+    admin_kb.add(types.InlineKeyboardButton(
+        "🔑 បំពេញ Token ជូន User នេះ", callback_data=f"subtoken_{uid}",
+    ))
+    try:
+        bot.send_message(
+            ADMIN_ID,
+            f"🤖 <b>សំណើជាវ Bot ថ្មី!</b>\n\n"
+            f"👤 User: {public_user_label(from_user)} (<code>{uid}</code>)\n"
+            f"🏦 Bakong ID: <code>{html.escape(bakong_id)}</code>\n\n"
+            f"ចុចប៊ូតុងខាងក្រោម ដើម្បីបំពេញ Token ជូន user នេះ:",
+            reply_markup=admin_kb,
+        )
+    except Exception as e:
+        print(f"[subscribe_bakong_id_step] failed to notify admin: {e}", flush=True)
+
+
+def admin_fill_token_step(message, target_uid):
+    """ទទួល Token ពី Admin (បន្ទាប់ពីចុច '🔑 បំពេញ Token') → រក្សាទុក ហើយផ្ញើទៅ user ភ្លាមៗ"""
+    if not is_admin(message.from_user.id):
+        return
+    token_text = (message.text or "").strip()
+    if not token_text:
+        bot.reply_to(message, "❌ Token មិនត្រឹមត្រូវទេ សូមព្យាយាមម្តងទៀត")
+        return
+    set_sub(
+        target_uid,
+        status="active",
+        token=token_text,
+        activated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    bot.reply_to(message, f"✅ បានបញ្ចូល Token ជូន user <code>{target_uid}</code> រួចរាល់ហើយ។")
+    try:
+        bot.send_message(
+            target_uid,
+            "🎉 <b>Bot ជាវរបស់អ្នកសកម្មភាពរួចរាល់!</b>\n\n"
+            f"🔑 Token: <code>{html.escape(token_text)}</code>\n\n"
+            "សូមរក្សា Token នេះទុកឲ្យបានល្អ (កុំចែកគេ)។",
+        )
+    except Exception as e:
+        print(f"[admin_fill_token_step] failed to notify user: {e}", flush=True)
 
 
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_HELP))
@@ -1476,6 +1608,50 @@ def callback_router(call):
         bot.edit_message_text(
             "🏠 ម៉ឺនុយចម្បង:", chat_id, call.message.message_id, reply_markup=main_menu_kb(),
         )
+
+    elif data == "menu_subscribe":
+        bot.edit_message_text(
+            subscribe_intro_text(), chat_id, call.message.message_id, reply_markup=subscribe_choice_kb(),
+        )
+
+    elif data == "sub_yes":
+        msg = bot.send_message(
+            chat_id,
+            "🏦 សូមវាយបញ្ចូល <b>Bakong ID</b> ផ្ទាល់ខ្លួនរបស់អ្នក (ឧ. yourname@bkrt):",
+        )
+        bot.register_next_step_handler(msg, subscribe_bakong_id_step, call.from_user)
+
+    elif data == "sub_no":
+        set_sub(
+            uid, status="no_bakong_manual", bakong_id=None, token=None,
+            requested_at=time.strftime("%Y-%m-%d %H:%M:%S"), activated_at=None,
+        )
+        bot.send_message(
+            chat_id,
+            f"📱 គ្មានបញ្ហា! Admin នឹងទាក់ទងអ្នកដោយផ្ទាល់ ដើម្បីរៀបចំការទូទាត់ QR ($ {BOT_SUBSCRIPTION_PRICE:.2f}) ដោយដៃ។\n"
+            f"អាចប្រើ ☎️ ជួយខ្ញុំផង ដើម្បីជជែកជាមួយ Admin ភ្លាមៗ។",
+        )
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"🤖 <b>សំណើជាវ Bot ថ្មី (គ្មាន Bakong ID)</b>\n\n"
+                f"👤 User: {public_user_label(call.from_user)} (<code>{uid}</code>)\n"
+                f"💵 តម្លៃ: ${BOT_SUBSCRIPTION_PRICE:.2f}\n\n"
+                f"សូមទាក់ទង user ដោយផ្ទាល់ដើម្បីរៀបចំ QR និងបញ្ចូលលុយដោយដៃ (/addbalance)។",
+            )
+        except Exception as e:
+            print(f"[sub_no] failed to notify admin: {e}", flush=True)
+
+    elif data.startswith("subtoken_"):
+        if not is_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        target_uid = int(data[len("subtoken_"):])
+        msg = bot.send_message(
+            chat_id,
+            f"🔑 សូមវាយបញ្ចូល Token សម្រាប់ user <code>{target_uid}</code>:",
+        )
+        bot.register_next_step_handler(msg, admin_fill_token_step, target_uid)
 
     elif data.startswith("buyopt_"):
         product_key = data.split("_", 1)[1]
@@ -2275,6 +2451,47 @@ def cmd_addbalance(message):
         bot.reply_to(message, f"✅ បន្ថែម ${amount.strip()} ចូល user {target_uid.strip()} (សមតុល្យថ្មី: ${new_balance:.2f})")
     except Exception:
         bot.reply_to(message, "ទំរង់ត្រូវជា:\n/addbalance user_id|amount\nឧ. /addbalance 123456789|10")
+
+
+@bot.message_handler(commands=["activatesub"])
+def cmd_activatesub(message):
+    """Admin fallback ដៃ បើប៊ូតុង 🔑 បំពេញ Token បាត់ ឬចង់ activate ដោយផ្ទាល់"""
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        _, payload = message.text.split(" ", 1)
+        target_uid_s, token_text = payload.split("|", 1)
+        target_uid = int(target_uid_s.strip())
+        token_text = token_text.strip()
+        set_sub(
+            target_uid, status="active", token=token_text,
+            activated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        bot.reply_to(message, f"✅ Activate subscription ជូន user {target_uid} រួចរាល់។")
+        bot.send_message(
+            target_uid,
+            "🎉 <b>Bot ជាវរបស់អ្នកសកម្មភាពរួចរាល់!</b>\n\n"
+            f"🔑 Token: <code>{html.escape(token_text)}</code>",
+        )
+    except Exception:
+        bot.reply_to(message, "ទំរង់ត្រូវជា:\n/activatesub user_id|token")
+
+
+@bot.message_handler(commands=["subs"])
+def cmd_subs(message):
+    """Admin មើលបញ្ជីសំណើជាវ Bot ដែលកំពុងរង់ចាំ"""
+    if not is_admin(message.from_user.id):
+        return
+    subs = load_subs()
+    pending = {uid: s for uid, s in subs.items() if s.get("status") != "active"}
+    if not pending:
+        bot.reply_to(message, "✅ គ្មានសំណើជាវ Bot ដែលកំពុងរង់ចាំទេ")
+        return
+    lines = ["⏳ <b>សំណើជាវ Bot កំពុងរង់ចាំ:</b>"]
+    for uid, s in pending.items():
+        tag = f"🏦 {s.get('bakong_id')}" if s.get("bakong_id") else "📱 គ្មាន Bakong ID (QR ដៃ)"
+        lines.append(f"• <code>{uid}</code> — {tag} — {s.get('requested_at', '')}")
+    bot.reply_to(message, "\n".join(lines))
 
 
 @bot.message_handler(commands=["broadcast"])
