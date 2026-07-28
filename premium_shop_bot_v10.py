@@ -97,9 +97,12 @@ PRODUCTS_FILE = os.path.join(DATA_DIR, "products.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "orders.json")
 EMOJI_FILE = os.path.join(DATA_DIR, "premium_emoji.json")
 SUBS_FILE = os.path.join(DATA_DIR, "subscriptions.json")
-# តម្លៃជួល Bot ផ្ទាល់ខ្លួន គិតជាថ្ងៃ (USD/ថ្ងៃ) — ប្រើតែក្នុងករណី user គ្មាន Bakong ID ផ្ទាល់ខ្លួន
-# (បើមាន Bakong ID ផ្ទាល់ខ្លួន បង់ចូល wallet ខ្លួនឯង ដូច្នេះមិនគិតថ្លៃជួលទេ)។ កែបានតាម Env Var
+# តម្លៃជួល Bot ផ្ទាល់ខ្លួន គិតជាថ្ងៃ (USD/ថ្ងៃ) — គិតលុយគ្រប់ subscriber ទាំងអស់
+# (ទោះមាន ឬអត់មាន Bakong ID ផ្ទាល់ខ្លួនក៏ដោយ) ត្រូវទូទាត់តាម KHQR មុននឹង deploy។ កែបានតាម Env Var
 BOT_RENTAL_PER_DAY_DEFAULT = float(os.environ.get("BOT_RENTAL_PER_DAY", "0.15"))
+# ប្រសិនបើជា bot ដែល deploy ជូន subscriber (clone) — លាក់ប៊ូតុង "ជាវ Bot ផ្ទាល់ខ្លួន"
+# ដើម្បីកុំឲ្យ customer របស់ subscriber អាចជាវ/លក់បន្តទៀត
+IS_SUBSCRIBER_BOT = os.environ.get("IS_SUBSCRIBER_BOT", "") == "1"
 
 os.makedirs(STOCK_DIR, exist_ok=True)
 
@@ -503,6 +506,7 @@ def deploy_subscriber_bot(uid, rec=None):
     env["CAMRAPIDPAY_API_KEY"] = rec.get("camrapidpay_api_key") or ""
     env["NOTIFY_CHAT_IDS"] = ""  # subscriber bot មិនផ្ញើសារចូល channel ហាងមេទេ
     env["STORE_NAME"] = rec.get("store_name") or f"Shop #{uid}"
+    env["IS_SUBSCRIBER_BOT"] = "1"  # bot ជួល (clone) មិនអនុញ្ញាតឲ្យបង្ហាញប៊ូតុង "ជាវ Bot ផ្ទាល់ខ្លួន" ទៀតទេ
     script_path = os.path.abspath(__file__)
     log_path = os.path.join(data_dir, "bot.log")
     try:
@@ -1094,7 +1098,8 @@ def products_kb():
             label = f"× {icon} {p['name'].upper()} - អស់ស្តុក"
             btn = pbtn(label, callback_data=f"nostock_{key}", style="danger")
         kb.add(btn)
-    kb.add(pbtn(BTN_SUBSCRIBE, callback_data="menu_subscribe"))
+    if not IS_SUBSCRIBER_BOT:
+        kb.add(pbtn(BTN_SUBSCRIBE, callback_data="menu_subscribe"))
     kb.add(pbtn("🔙 ត្រឡប់ក្រោយ", callback_data="back_main"))
     return kb
 
@@ -1373,6 +1378,8 @@ def subscribe_choice_kb():
 @bot.message_handler(commands=["subscribe"])
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_SUBSCRIBE))
 def reply_subscribe(message):
+    if IS_SUBSCRIBER_BOT:
+        return
     msg = bot.send_message(message.chat.id, subscribe_intro_text())
     bot.register_next_step_handler(msg, subscribe_token_step, message.from_user)
 
@@ -1404,6 +1411,7 @@ def subscribe_token_step(message, from_user):
         amount_paid=None,
         requested_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         activated_at=None,
+        requester_label=public_user_label(from_user),
     )
     msg = bot.send_message(
         chat_id,
@@ -1443,9 +1451,8 @@ def subscribe_storename_step(message, from_user):
 
 
 def subscribe_bakong_id_step(message, from_user):
-    """ទទួល Bakong ID ពី user (បន្ទាប់ពីចុច 'មាន Bakong ID') → រក្សាទុក ស្ថានភាព
-    'waiting_admin_deploy' ហើយជូនដំណឹង Admin ដោយផ្ទាល់ព្រមទាំង Token + Bakong ID
-    ដើម្បីឲ្យ Admin បំពេញ API CamRapidPay ជូន (សម្រាប់ឲ្យ Bot បង្កើត QR ស្វ័យប្រវត្តិបាន)។"""
+    """ទទួល Bakong ID ពី user (បន្ទាប់ពីចុច 'មាន Bakong ID') → រក្សាទុក
+    ហើយបន្តសួរចំនួនថ្ងៃដែលចង់ជួល (ដូចផ្លូវ 'អត់មាន Bakong ID') មុននឹងបង្កើត QR ទូទាត់ថ្លៃជួល។"""
     uid = from_user.id
     chat_id = message.chat.id
     bakong_id = (message.text or "").strip()
@@ -1456,14 +1463,13 @@ def subscribe_bakong_id_step(message, from_user):
     if not rec.get("bot_token"):
         bot.send_message(chat_id, "❌ រកមិនឃើញ Token ដែលបានផ្ញើមុននេះទេ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត")
         return
-    set_sub(uid, status="waiting_admin_deploy", bakong_id=bakong_id, qr_photo_file_id=None)
-    bot.send_message(
+    set_sub(uid, bakong_id=bakong_id, qr_photo_file_id=None)
+    msg = bot.send_message(
         chat_id,
-        "✅ បានទទួល Bakong ID របស់អ្នករួចហើយ។\n"
-        "⏳ សូមរង់ចាំ Admin បំពេញ API CamRapidPay ជូន ដើម្បីឲ្យ Bot របស់អ្នកបង្កើត QR ស្វ័យប្រវត្តិបាន — "
-        "bot នឹងជូនដំណឹងភ្លាមៗពេលរួចរាល់។",
+        "✅ បានទទួល Bakong ID របស់អ្នករួចហើយ។\n\n"
+        f"📅 សូមវាយបញ្ចូល <b>ចំនួនថ្ងៃ</b> ដែលអ្នកចង់ជួល (${get_rental_per_day():.2f}/ថ្ងៃ, ឧ. 30):",
     )
-    _notify_admin_new_sub(uid, from_user, rec.get("bot_token"), store_name=rec.get("store_name"), bakong_id=bakong_id)
+    bot.register_next_step_handler(msg, subscribe_days_step, from_user)
 
 
 def subscribe_qr_photo_step(message, from_user):
@@ -1489,8 +1495,10 @@ def subscribe_qr_photo_step(message, from_user):
 
 
 def subscribe_days_step(message, from_user):
-    """ទទួលចំនួនថ្ងៃដែលចង់ជួល (ករណីគ្មាន Bakong ID ខ្លួនឯង) → គិតលុយ ${BOT_RENTAL_PER_DAY}/ថ្ងៃ
-    → កាត់ពី Wallet បើគ្រប់ ឬសុំឲ្យ /deposit បន្ថែមបើមិនគ្រប់។"""
+    """ទទួលចំនួនថ្ងៃដែលចង់ជួល (ទាំង 2 ផ្លូវ: មាន/អត់មាន Bakong ID ខ្លួនឯង) → គិតលុយ
+    ${BOT_RENTAL_PER_DAY}/ថ្ងៃ → បង្កើត Bakong KHQR ដើម្បីឲ្យ user Scan ទូទាត់ផ្ទាល់។
+    • មាន Bakong ID ខ្លួនឯង → ទូទាត់ auto-detect (ដូច /deposit) មិនចាំបាច់ផ្ញើ receipt ទេ
+    • អត់មាន Bakong ID ខ្លួនឯង → ត្រូវផ្ញើ receipt ជូន Admin ត្រួតពិនិត្យ ហើយបញ្ជាក់ដោយដៃ"""
     uid = from_user.id
     chat_id = message.chat.id
     raw = (message.text or "").strip()
@@ -1504,25 +1512,200 @@ def subscribe_days_step(message, from_user):
     if not rec.get("bot_token"):
         bot.send_message(chat_id, "❌ រកមិនឃើញ Token ដែលបានផ្ញើមុននេះទេ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត")
         return
-    user = get_user(uid)
-    if user["balance"] < total:
-        bot.send_message(
-            chat_id,
-            f"❌ សមតុល្យមិនគ្រប់គ្រាន់ (${user['balance']:.2f}/${total:.2f}) សម្រាប់ {days} ថ្ងៃ។\n"
-            f"សូម /deposit បន្ថែម រួចចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត។",
-        )
+    set_sub(uid, status="waiting_payment", rental_days=days, amount_paid=total)
+    if rec.get("bakong_id"):
+        handle_sub_payment_auto(uid, chat_id, days, total, from_user)
+    else:
+        handle_sub_payment_manual(uid, chat_id, days, total, from_user)
+
+
+def handle_sub_payment_auto(uid, chat_id, days, total, from_user):
+    """[មាន Bakong ID ខ្លួនឯង] បង្កើត Bakong KHQR (CamRapidPay របស់ហាងមេ) សម្រាប់ទូទាត់ថ្លៃជួល
+    Bot ({days} ថ្ងៃ) ហើយ poll ស្វ័យប្រវត្តិ (auto-detect) រហូតដល់ទូទាត់ជោគជ័យ — មិនចាំបាច់ receipt ទេ។"""
+    def _fail(err_text):
+        retry_kb = types.InlineKeyboardMarkup()
+        retry_kb.add(types.InlineKeyboardButton(
+            "🔁 ព្យាយាមម្តងទៀត", callback_data=f"subpay_retry_{uid}"
+        ))
+        bot.send_message(chat_id, f"{err_text}\n\nសូមព្យាយាមម្តងទៀត បើ error នៅតែកើតឡើង ជា server ខាង gateway ខ្លួនឯងគាំង (មិនមែនកូដឯង)។", reply_markup=retry_kb)
+
+    ref = f"KZSUB{uid}{int(time.time())}"[:50]
+    ref_disp = f"SUB-{hashlib.md5(ref.encode()).hexdigest()[:8].upper()}"
+
+    caption = (
+        f"🤖 ថ្លៃជួល Bot <b>${total:.2f}</b> ({days} ថ្ងៃ)\n💳 វិធីទូទាត់: <b>Bakong KHQR</b>\n🔖 <code>{ref_disp}</code>\n\n"
+        f"📱 សូម Scan QR ខាងក្រោម (ឬចុចប៊ូតុងទំព័រទូទាត់) ដើម្បីទូទាត់\n"
+        f"✅ ប្រព័ន្ធនឹង detect ស្វ័យប្រវត្តិ (មិនចាំបាច់ផ្ញើ receipt ទេ)\n⏳ QR ផុតកំណត់ក្នុង ~5-10 នាទី"
+    )
+
+    data = camrapid_create(total, ref)
+    if not data:
+        _fail(f"❌ មិនអាចបង្កើត QR បានទេ (Bakong KHQR)\n\nមូលហេតុ:\n{_last_camrapid_error[:180]}")
         return
-    update_balance(uid, -total)
-    set_sub(uid, status="waiting_admin_deploy", rental_days=days, amount_paid=total)
+
+    qr_string = data.get("qr_code", "")
+    payment_url = data.get("payment_url", "")
+
+    kb = None
+    if payment_url:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔗 បើកទំព័រទូទាត់", url=payment_url))
+
+    img_buf = build_qr_image(
+        qr_string, amount=total, ref=ref_disp,
+        label="Bot Rental", subtitle=f"{STORE_NAME} · Bakong KHQR",
+    ) if qr_string else None
+    photo = img_buf or None
+
+    if photo:
+        bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
+    elif payment_url:
+        bot.send_message(chat_id, caption, reply_markup=kb)
+    else:
+        _fail("❌ គ្មានទិន្នន័យ QR ត្រឡប់មកទេ សូមព្យាយាមម្តងទៀត")
+        return
+
+    t = threading.Thread(
+        target=poll_sub_payment_auto,
+        args=(uid, chat_id, ref, days, total, from_user),
+        daemon=True,
+    )
+    t.start()
+
+
+def poll_sub_payment_auto(uid, chat_id, reference, days, total, from_user, max_minutes=10, checker=None):
+    """[មាន Bakong ID] Background thread ដើម្បី poll ការទូទាត់ថ្លៃជួល Bot រហូតដល់ PAID ឬ timeout។
+    ពេលទូទាត់ជោគជ័យ → ប្តូរស្ថានភាពទៅ 'waiting_admin_deploy' ហើយជូនដំណឹង Admin ភ្លាមៗ (គ្មាន receipt review)។"""
+    checker = checker or camrapid_check
+    deadline = time.time() + max_minutes * 60
+    while time.time() < deadline:
+        if checker(reference):
+            rec = get_sub(uid) or {}
+            set_sub(uid, status="waiting_admin_deploy", rental_days=days, amount_paid=total)
+            try:
+                bot.send_message(
+                    chat_id,
+                    f"✅ ការទូទាត់ជោគជ័យ! <b>${total:.2f}</b> ({days} ថ្ងៃ)\n"
+                    f"⏳ សូមរង់ចាំ Admin ដាក់ Bot ឲ្យអ្នកដំណើរការ — bot នឹងជូនដំណឹងភ្លាមៗពេលរួចរាល់។",
+                )
+            except Exception:
+                pass
+            _notify_admin_new_sub(
+                uid, rec.get("requester_label") or public_user_label(from_user), rec.get("bot_token"),
+                store_name=rec.get("store_name"), bakong_id=rec.get("bakong_id"),
+                rental_days=days, amount_paid=total, qr_photo_file_id=rec.get("qr_photo_file_id"),
+            )
+            return
+        time.sleep(8)
+    try:
+        bot.send_message(chat_id, "⌛ QR ផុតកំណត់ ឬមិនទាន់ទូទាត់។ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត ដើម្បីព្យាយាមថ្មី")
+    except Exception:
+        pass
+
+
+def handle_sub_payment_manual(uid, chat_id, days, total, from_user):
+    """[អត់មាន Bakong ID ខ្លួនឯង] បង្កើត Bakong KHQR (CamRapidPay របស់ហាងមេ) សម្រាប់ទូទាត់ថ្លៃជួល Bot
+    ({days} ថ្ងៃ) រួចសុំឲ្យ user ផ្ញើ <b>វិក័យប័ត្រ/receipt</b> ត្រឡប់មកវិញ បន្ទាប់ពីទូទាត់រួច
+    (Admin ជាអ្នកត្រួតពិនិត្យ ហើយបញ្ជាក់ការទូទាត់ដោយដៃ — មិនមែន auto-detect ទេ)។"""
+    def _fail(err_text):
+        retry_kb = types.InlineKeyboardMarkup()
+        retry_kb.add(types.InlineKeyboardButton(
+            "🔁 ព្យាយាមម្តងទៀត", callback_data=f"subpay_retry_{uid}"
+        ))
+        bot.send_message(chat_id, f"{err_text}\n\nសូមព្យាយាមម្តងទៀត បើ error នៅតែកើតឡើង ជា server ខាង gateway ខ្លួនឯងគាំង (មិនមែនកូដឯង)។", reply_markup=retry_kb)
+
+    ref = f"KZSUB{uid}{int(time.time())}"[:50]
+    ref_disp = f"SUB-{hashlib.md5(ref.encode()).hexdigest()[:8].upper()}"
+
+    caption = (
+        f"🤖 ថ្លៃជួល Bot <b>${total:.2f}</b> ({days} ថ្ងៃ)\n💳 វិធីទូទាត់: <b>Bakong KHQR</b>\n🔖 <code>{ref_disp}</code>\n\n"
+        f"📱 សូម Scan QR ខាងក្រោម (ឬចុចប៊ូតុងទំព័រទូទាត់) ដើម្បីទូទាត់\n"
+        f"📸 <b>បន្ទាប់ពីទូទាត់រួច សូមថតរូបភាព (screenshot) វិក័យប័ត្រ/receipt ផ្ញើមកវិញនៅសារបន្ទាប់</b> "
+        f"ដើម្បីឲ្យ Admin ត្រួតពិនិត្យ និងបញ្ជាក់ការទូទាត់ជូន។"
+    )
+
+    data = camrapid_create(total, ref)
+    if not data:
+        _fail(f"❌ មិនអាចបង្កើត QR បានទេ (Bakong KHQR)\n\nមូលហេតុ:\n{_last_camrapid_error[:180]}")
+        return
+
+    qr_string = data.get("qr_code", "")
+    payment_url = data.get("payment_url", "")
+
+    kb = None
+    if payment_url:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔗 បើកទំព័រទូទាត់", url=payment_url))
+
+    img_buf = build_qr_image(
+        qr_string, amount=total, ref=ref_disp,
+        label="Bot Rental", subtitle=f"{STORE_NAME} · Bakong KHQR",
+    ) if qr_string else None
+    photo = img_buf or None
+
+    sent_msg = None
+    if photo:
+        sent_msg = bot.send_photo(chat_id, photo, caption=caption, reply_markup=kb)
+    elif payment_url:
+        sent_msg = bot.send_message(chat_id, caption, reply_markup=kb)
+    else:
+        _fail("❌ គ្មានទិន្នន័យ QR ត្រឡប់មកទេ សូមព្យាយាមម្តងទៀត")
+        return
+
+    set_sub(uid, status="waiting_receipt", rental_days=days, amount_paid=total)
+    bot.register_next_step_handler(sent_msg, subscribe_receipt_step, from_user)
+
+
+def subscribe_receipt_step(message, from_user):
+    """ទទួលរូបភាពវិក័យប័ត្រ/receipt ពី user (បន្ទាប់ពី Scan ទូទាត់រួច) → បញ្ជូនទៅ Admin
+    ដើម្បីត្រួតពិនិត្យ ហើយបញ្ជាក់ការទូទាត់ដោយដៃ (មិន auto-detect ទេ)។"""
+    uid = from_user.id
+    chat_id = message.chat.id
+    if not message.photo:
+        msg = bot.send_message(
+            chat_id,
+            "❌ សូមផ្ញើជា <b>រូបភាព (Screenshot)</b> នៃវិក័យប័ត្រ/receipt ដែលបានទូទាត់ រួចផ្ញើម្តងទៀត:",
+        )
+        bot.register_next_step_handler(msg, subscribe_receipt_step, from_user)
+        return
+    rec = get_sub(uid) or {}
+    if not rec.get("bot_token") or not rec.get("rental_days"):
+        bot.send_message(chat_id, "❌ រកមិនឃើញព័ត៌មានជួលទេ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត")
+        return
+    receipt_file_id = message.photo[-1].file_id
+    set_sub(uid, status="waiting_admin_review", receipt_file_id=receipt_file_id)
     bot.send_message(
         chat_id,
-        f"✅ បានទូទាត់ <b>${total:.2f}</b> ({days} ថ្ងៃ) ចេញពី Wallet។\n"
-        f"⏳ សូមរង់ចាំ Admin ដាក់ Bot ឲ្យអ្នកដំណើរការ — bot នឹងជូនដំណឹងភ្លាមៗពេលរួចរាល់។",
+        "✅ បានទទួលវិក័យប័ត្ររបស់អ្នករួចហើយ។\n"
+        "⏳ សូមរង់ចាំ Admin ត្រួតពិនិត្យការទូទាត់ — bot នឹងជូនដំណឹងភ្លាមៗពេលបញ្ជាក់រួច។",
     )
-    _notify_admin_new_sub(
-        uid, from_user, rec.get("bot_token"), store_name=rec.get("store_name"),
-        rental_days=days, amount_paid=total, qr_photo_file_id=rec.get("qr_photo_file_id"),
+    _notify_admin_payment_receipt(uid, from_user, rec, receipt_file_id)
+
+
+def _notify_admin_payment_receipt(uid, from_user, rec, receipt_file_id):
+    """ផ្ញើវិក័យប័ត្រដែល user ទើបផ្ញើ ទៅ Admin ព្រមទាំង button ✅ បញ្ជាក់ / ❌ បដិសេធ
+    ដើម្បីអោយ Admin ត្រួតពិនិត្យ និងចុះលុយឲ្យ user ដោយដៃ។"""
+    days = rec.get("rental_days")
+    total = rec.get("amount_paid")
+    lines = [
+        "🧾 <b>វិក័យប័ត្រទូទាត់ថ្លៃជួល Bot!</b>",
+        "",
+        f"👤 User: {public_user_label(from_user)} (<code>{uid}</code>)",
+        f"🏪 ឈ្មោះហាង: <b>{html.escape(rec.get('store_name') or '')}</b>",
+        f"📅 ជួល: {days} ថ្ងៃ · 💵 ត្រូវទូទាត់: ${total:.2f}",
+    ]
+    if rec.get("bakong_id"):
+        lines.append(f"🏦 Bakong ID ខ្លួនឯង: <code>{html.escape(rec.get('bakong_id'))}</code>")
+    lines.append("\nសូមត្រួតពិនិត្យវិក័យប័ត្រខាងក្រោម រួចចុចប៊ូតុងដើម្បីបញ្ជាក់ ឬបដិសេធ:")
+    admin_kb = types.InlineKeyboardMarkup(row_width=2)
+    admin_kb.add(
+        types.InlineKeyboardButton("✅ បញ្ជាក់ការទូទាត់", callback_data=f"subpay_confirm_{uid}"),
+        types.InlineKeyboardButton("❌ បដិសេធ", callback_data=f"subpay_reject_{uid}"),
     )
+    try:
+        bot.send_photo(ADMIN_ID, receipt_file_id, caption="\n".join(lines), reply_markup=admin_kb)
+    except Exception as e:
+        print(f"[_notify_admin_payment_receipt] failed to notify admin: {e}", flush=True)
 
 
 def admin_subdeploy_apikey_step(message, target_uid):
@@ -1550,11 +1733,11 @@ def admin_subdeploy_apikey_step(message, target_uid):
         print(f"[admin_subdeploy_apikey_step] failed to notify user: {e}", flush=True)
 
 
-def _notify_admin_new_sub(uid, from_user, bot_token, store_name=None, bakong_id=None, rental_days=None, amount_paid=None, qr_photo_file_id=None):
+def _notify_admin_new_sub(uid, user_label, bot_token, store_name=None, bakong_id=None, rental_days=None, amount_paid=None, qr_photo_file_id=None):
     lines = [
         "🤖 <b>សំណើជាវ Bot ថ្មី!</b>",
         "",
-        f"👤 User: {public_user_label(from_user)} (<code>{uid}</code>)",
+        f"👤 User: {user_label or 'User'} (<code>{uid}</code>)",
         f"🏪 ឈ្មោះហាង: <b>{html.escape(store_name or '')}</b>",
         f"🔑 Bot Token: <code>{html.escape(bot_token or '')}</code>",
     ]
@@ -1871,6 +2054,9 @@ def callback_router(call):
         )
 
     elif data == "menu_subscribe":
+        if IS_SUBSCRIBER_BOT:
+            bot.answer_callback_query(call.id)
+            return
         msg = bot.send_message(chat_id, subscribe_intro_text())
         bot.register_next_step_handler(msg, subscribe_token_step, call.from_user)
 
@@ -1887,6 +2073,77 @@ def callback_router(call):
             "🖼 សូមផ្ញើ <b>រូបភាព QR</b> ផ្ទាល់ខ្លួនរបស់អ្នក (screenshot ពី App ធនាគារ/Bakong):",
         )
         bot.register_next_step_handler(msg, subscribe_qr_photo_step, call.from_user)
+
+    elif data.startswith("subpay_retry_"):
+        target_uid = int(data[len("subpay_retry_"):])
+        if target_uid != uid:
+            bot.answer_callback_query(call.id)
+            return
+        rec = get_sub(uid) or {}
+        days = rec.get("rental_days")
+        total = rec.get("amount_paid")
+        if not days or not total:
+            bot.answer_callback_query(call.id, "❌ រកមិនឃើញព័ត៌មានជួលទេ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        if rec.get("bakong_id"):
+            handle_sub_payment_auto(uid, chat_id, days, total, call.from_user)
+        else:
+            handle_sub_payment_manual(uid, chat_id, days, total, call.from_user)
+
+    elif data.startswith("subpay_confirm_"):
+        if not is_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        target_uid = int(data[len("subpay_confirm_"):])
+        rec = get_sub(target_uid) or {}
+        set_sub(target_uid, status="waiting_admin_deploy")
+        bot.answer_callback_query(call.id, "✅ បានបញ្ជាក់ការទូទាត់")
+        try:
+            bot.edit_message_caption(
+                chat_id=call.message.chat.id, message_id=call.message.message_id,
+                caption=call.message.caption + "\n\n✅ <b>ការទូទាត់ត្រូវបានបញ្ជាក់</b>",
+            )
+        except Exception:
+            pass
+        try:
+            bot.send_message(
+                target_uid,
+                f"✅ Admin បានបញ្ជាក់ការទូទាត់ថ្លៃជួល Bot របស់អ្នករួចហើយ (${rec.get('amount_paid', 0):.2f}, {rec.get('rental_days')} ថ្ងៃ)។\n"
+                f"⏳ សូមរង់ចាំ Admin ដាក់ Bot ឲ្យអ្នកដំណើរការ — bot នឹងជូនដំណឹងភ្លាមៗពេលរួចរាល់។",
+            )
+        except Exception as e:
+            print(f"[subpay_confirm_] failed to notify user: {e}", flush=True)
+        _notify_admin_new_sub(
+            target_uid, rec.get("requester_label"),
+            rec.get("bot_token"), store_name=rec.get("store_name"),
+            bakong_id=rec.get("bakong_id"), rental_days=rec.get("rental_days"), amount_paid=rec.get("amount_paid"),
+            qr_photo_file_id=rec.get("qr_photo_file_id"),
+        )
+
+    elif data.startswith("subpay_reject_"):
+        if not is_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        target_uid = int(data[len("subpay_reject_"):])
+        rec = get_sub(target_uid) or {}
+        set_sub(target_uid, status="waiting_receipt", receipt_file_id=None)
+        bot.answer_callback_query(call.id, "❌ បានបដិសេធ")
+        try:
+            bot.edit_message_caption(
+                chat_id=call.message.chat.id, message_id=call.message.message_id,
+                caption=call.message.caption + "\n\n❌ <b>បដិសេធដោយ Admin</b>",
+            )
+        except Exception:
+            pass
+        try:
+            bot.send_message(
+                target_uid,
+                "❌ Admin មិនអាចបញ្ជាក់ការទូទាត់របស់អ្នកបានទេ។\n"
+                "សូមត្រួតពិនិត្យវិញ រួចផ្ញើរូបភាពវិក័យប័ត្រ/receipt ដែលត្រឹមត្រូវម្តងទៀត ឬទាក់ទង Admin ដោយផ្ទាល់។",
+            )
+        except Exception as e:
+            print(f"[subpay_reject_] failed to notify user: {e}", flush=True)
 
     elif data.startswith("subdeploy_"):
         if not is_admin(uid):
