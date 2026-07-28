@@ -97,6 +97,11 @@ PRODUCTS_FILE = os.path.join(DATA_DIR, "products.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "orders.json")
 EMOJI_FILE = os.path.join(DATA_DIR, "premium_emoji.json")
 SUBS_FILE = os.path.join(DATA_DIR, "subscriptions.json")
+# ករណីហាង/subscriber គ្មាន Bakong ID ផ្ទាល់ខ្លួន (គ្មាន CAMRAPIDPAY_API_KEY) — deposit នឹងប្រើ
+# QR ផ្ទាល់ខ្លួនដែល admin កំណត់ដោយដៃ (មិនមែន QR របស់ហាងមេ) រួច user ត្រូវផ្ញើវិក័យប័ត្រ/screenshot
+# មកឲ្យ admin ត្រួតពិនិត្យ + បញ្ចូលលុយឲ្យដោយដៃ (មិនមែន auto-detect ដូច Bakong ទេ)
+PAYMENT_CONFIG_FILE = os.path.join(DATA_DIR, "payment_config.json")
+PENDING_DEPOSITS_FILE = os.path.join(DATA_DIR, "pending_deposits.json")
 # តម្លៃជួល Bot ផ្ទាល់ខ្លួន គិតជាថ្ងៃ (USD/ថ្ងៃ) — គិតលុយគ្រប់ subscriber ទាំងអស់
 # (ទោះមាន ឬអត់មាន Bakong ID ផ្ទាល់ខ្លួនក៏ដោយ) ត្រូវទូទាត់តាម KHQR មុននឹង deploy។ កែបានតាម Env Var
 BOT_RENTAL_PER_DAY_DEFAULT = float(os.environ.get("BOT_RENTAL_PER_DAY", "0.15"))
@@ -447,6 +452,82 @@ def set_sub(uid, **fields):
         rec.update(fields)
         subs[str(uid)] = rec
         save_subs(subs)
+        return rec
+
+
+# ------------------------------------------------------------------
+# MANUAL QR DEPOSIT (សម្រាប់ហាង/subscriber ដែលគ្មាន Bakong ID ផ្ទាល់ខ្លួន)
+# ------------------------------------------------------------------
+# បើ CAMRAPIDPAY_API_KEY មិនបានកំណត់ទេ (គ្មាន Bakong auto-payment) — deposit នឹងប្រើ QR
+# ផ្ទាល់ខ្លួនដែល admin (ម្ចាស់ហាងនោះ) បានផ្ញើទុកជាមុន (ABA/Wing/ACLEDA... QR អីក៏បាន)។ user
+# scan QR នេះទូទាត់ រួចផ្ញើ screenshot វិក័យប័ត្រមកវិញ → admin ត្រួតពិនិត្យ ហើយចុច
+# "✅ បញ្ជាក់" ដើម្បីបញ្ចូលលុយចូល wallet ដោយដៃ (មិនមែន auto-detect)។
+def load_payment_config():
+    return _load(PAYMENT_CONFIG_FILE, {"manual_qr_file_id": None, "manual_qr_note": ""})
+
+
+def save_payment_config(d):
+    _save(PAYMENT_CONFIG_FILE, d)
+
+
+def get_manual_qr():
+    cfg = load_payment_config()
+    return cfg.get("manual_qr_file_id"), cfg.get("manual_qr_note") or ""
+
+
+def set_manual_qr(file_id, note=None):
+    with _lock:
+        cfg = load_payment_config()
+        cfg["manual_qr_file_id"] = file_id
+        if note is not None:
+            cfg["manual_qr_note"] = note
+        save_payment_config(cfg)
+        return cfg
+
+
+def has_auto_bakong():
+    """True បើហាងនេះមាន Bakong auto-payment (CAMRAPIDPAY_API_KEY កំណត់ហើយ) —
+    False មានន័យថាត្រូវប្រើ QR ផ្ទាល់ខ្លួន (manual) ជំនួសវិញ។"""
+    return bool(CAMRAPIDPAY_API_KEY)
+
+
+def load_pending_deposits():
+    return _load(PENDING_DEPOSITS_FILE, {})
+
+
+def save_pending_deposits(d):
+    _save(PENDING_DEPOSITS_FILE, d)
+
+
+def create_pending_deposit(dep_id, uid, amount, ref_disp):
+    with _lock:
+        deps = load_pending_deposits()
+        deps[dep_id] = {
+            "uid": uid,
+            "amount": amount,
+            "ref": ref_disp,
+            "status": "pending",  # pending | approved | rejected
+            "receipt_file_id": None,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        save_pending_deposits(deps)
+        return deps[dep_id]
+
+
+def get_pending_deposit(dep_id):
+    deps = load_pending_deposits()
+    return deps.get(dep_id)
+
+
+def update_pending_deposit(dep_id, **fields):
+    with _lock:
+        deps = load_pending_deposits()
+        rec = deps.get(dep_id)
+        if not rec:
+            return None
+        rec.update(fields)
+        deps[dep_id] = rec
+        save_pending_deposits(deps)
         return rec
 
 
@@ -1189,6 +1270,7 @@ ADMIN_BTN_MSGUSER = "📨 ផ្ញើសារទៅ User"
 ADMIN_BTN_BROADCAST = "📢 ផ្ញើសារទៅគ្រប់គ្នា"
 ADMIN_BTN_EMOJI = "🎭 Setup Emoji"
 ADMIN_BTN_SUBPRICE = "💵 កែតម្លៃជួល Bot"
+ADMIN_BTN_SETQR = "🖼 កំណត់ QR ទូទាត់ដោយដៃ"
 
 
 def main_reply_kb():
@@ -1211,6 +1293,7 @@ def admin_reply_kb():
     kb.add(preply_btn(ADMIN_BTN_BROADCAST, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_EMOJI, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_SUBPRICE, style="primary"))
+    kb.add(preply_btn(ADMIN_BTN_SETQR, style="primary"))
     return kb
 
 
@@ -1495,10 +1578,10 @@ def subscribe_qr_photo_step(message, from_user):
 
 
 def subscribe_days_step(message, from_user):
-    """ទទួលចំនួនថ្ងៃដែលចង់ជួល (ទាំង 2 ផ្លូវ: មាន/អត់មាន Bakong ID ខ្លួនឯង) → គិតលុយ
-    ${BOT_RENTAL_PER_DAY}/ថ្ងៃ → បង្កើត Bakong KHQR ដើម្បីឲ្យ user Scan ទូទាត់ផ្ទាល់។
-    • មាន Bakong ID ខ្លួនឯង → ទូទាត់ auto-detect (ដូច /deposit) មិនចាំបាច់ផ្ញើ receipt ទេ
-    • អត់មាន Bakong ID ខ្លួនឯង → ត្រូវផ្ញើ receipt ជូន Admin ត្រួតពិនិត្យ ហើយបញ្ជាក់ដោយដៃ"""
+    """ទទួលចំនួនថ្ងៃដែលចង់ជួល → គិតលុយ ${BOT_RENTAL_PER_DAY}/ថ្ងៃ → បង្កើត Bakong KHQR
+    របស់ហាងមេ (ដែលមាន Bakong ពិត) ដើម្បីទូទាត់ថ្លៃជួល → auto-detect ជានិច្ច
+    (មិនចាំបាច់ផ្ញើ receipt ទេ — ព្រោះនេះជាការទូទាត់ទៅឲ្យហាងមេ មិនមែនអាស្រ័យលើថាតើ
+    subscriber ខ្លួនឯងមាន Bakong ID សម្រាប់ហាងផ្ទាល់ខ្លួនរបស់គាត់ឬអត់ទេ)"""
     uid = from_user.id
     chat_id = message.chat.id
     raw = (message.text or "").strip()
@@ -1513,10 +1596,7 @@ def subscribe_days_step(message, from_user):
         bot.send_message(chat_id, "❌ រកមិនឃើញ Token ដែលបានផ្ញើមុននេះទេ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត")
         return
     set_sub(uid, status="waiting_payment", rental_days=days, amount_paid=total)
-    if rec.get("bakong_id"):
-        handle_sub_payment_auto(uid, chat_id, days, total, from_user)
-    else:
-        handle_sub_payment_manual(uid, chat_id, days, total, from_user)
+    handle_sub_payment_auto(uid, chat_id, days, total, from_user)
 
 
 def handle_sub_payment_auto(uid, chat_id, days, total, from_user):
@@ -2086,10 +2166,7 @@ def callback_router(call):
             bot.answer_callback_query(call.id, "❌ រកមិនឃើញព័ត៌មានជួលទេ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត", show_alert=True)
             return
         bot.answer_callback_query(call.id)
-        if rec.get("bakong_id"):
-            handle_sub_payment_auto(uid, chat_id, days, total, call.from_user)
-        else:
-            handle_sub_payment_manual(uid, chat_id, days, total, call.from_user)
+        handle_sub_payment_auto(uid, chat_id, days, total, call.from_user)
 
     elif data.startswith("subpay_confirm_"):
         if not is_admin(uid):
@@ -2216,6 +2293,18 @@ def callback_router(call):
     elif data.startswith("dep_"):
         amount = float(data.split("_", 1)[1])
         handle_deposit(uid, chat_id, amount, call.from_user, call=call)
+
+    elif data.startswith("depapprove_"):
+        if not is_admin(uid):
+            return
+        dep_id = data[len("depapprove_"):]
+        _handle_deposit_approve(call, dep_id)
+
+    elif data.startswith("depreject_"):
+        if not is_admin(uid):
+            return
+        dep_id = data[len("depreject_"):]
+        _handle_deposit_reject(call, dep_id)
 
     elif data == "admcancel":
         bot.edit_message_text("🚫 បានបោះបង់។", chat_id, call.message.message_id)
@@ -2484,6 +2573,16 @@ def handle_buy_wallet(call, product_key, qty=1):
 
 
 def handle_deposit(uid, chat_id, amount, user_obj, call=None):
+    """ចំណុចចូលរួមតែមួយសម្រាប់ deposit ទាំងអស់៖
+    • បើហាងនេះមាន Bakong ID ផ្ទាល់ខ្លួន (CAMRAPIDPAY_API_KEY កំណត់ហើយ) → auto KHQR + auto-detect ដូចមុន
+    • បើអត់មាន (គ្មាន Bakong) → ប្រើ QR ផ្ទាល់ខ្លួនដែល admin កំណត់ដោយដៃ + ឲ្យ user ផ្ញើវិក័យប័ត្រមកផ្ទៀងផ្ទាត់ដោយដៃ"""
+    if not has_auto_bakong():
+        handle_deposit_manual(uid, chat_id, amount, user_obj, call=call)
+        return
+    _handle_deposit_auto(uid, chat_id, amount, user_obj, call=call)
+
+
+def _handle_deposit_auto(uid, chat_id, amount, user_obj, call=None):
     """បង្កើត Bakong KHQR (CamRapidPay) សម្រាប់ deposit។
     (V12: លុបជម្រើសទូទាត់តាម ABA ចេញ — Bakong KHQR ជាតែមួយ)"""
     def _fail(err_text):
@@ -2538,6 +2637,163 @@ def handle_deposit(uid, chat_id, amount, user_obj, call=None):
         daemon=True,
     )
     t.start()
+
+
+def handle_deposit_manual(uid, chat_id, amount, user_obj, call=None):
+    """[គ្មាន Bakong ID] ផ្ញើ QR ផ្ទាល់ខ្លួនដែល admin បានកំណត់ជាមុន (មិនមែន QR ស្វ័យប្រវត្តិទេ)
+    រួច ស្នើសុំឲ្យ user ផ្ញើវិក័យប័ត្រ/screenshot មកវិញ ដើម្បីឲ្យ admin ត្រួតពិនិត្យ + បញ្ចូលលុយឲ្យដោយដៃ។"""
+    qr_file_id, qr_note = get_manual_qr()
+    if not qr_file_id:
+        text = (
+            "⚠️ ហាងនេះមិនទាន់កំណត់ QR ទូទាត់ដោយដៃនៅឡើយទេ។\n"
+            "សូមទាក់ទង Admin ដើម្បីដាក់លុយចូល Wallet ជូន។"
+        )
+        if call:
+            bot.answer_callback_query(call.id, text, show_alert=True)
+        else:
+            bot.send_message(chat_id, text)
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"🚨 <b>User ព្យាយាមដាក់លុយ ${amount:.2f} តែអ្នកមិនទាន់កំណត់ QR ទូទាត់ដោយដៃទេ!</b>\n"
+                f"👤 {public_user_label(user_obj)} (<code>{uid}</code>)\n\n"
+                f"សូមចុច 🖼 កំណត់ QR ទូទាត់ ដើម្បីកំណត់ QR របស់អ្នកជាមុនសិន។",
+            )
+        except Exception:
+            pass
+        return
+
+    ref = f"KZDEP{uid}{int(time.time())}"[:50]
+    ref_disp = f"DEP-{hashlib.md5(ref.encode()).hexdigest()[:8].upper()}"
+    dep_id = ref_disp
+
+    create_pending_deposit(dep_id, uid, amount, ref_disp)
+
+    note_line = f"\nℹ️ {html.escape(qr_note)}\n" if qr_note else ""
+    caption = (
+        f"💰 Deposit <b>${amount:.2f}</b>\n💳 វិធីទូទាត់: <b>QR ផ្ទាល់ខ្លួនរបស់ហាង</b>\n🔖 <code>{ref_disp}</code>\n"
+        f"{note_line}\n"
+        f"📱 សូម Scan QR ខាងក្រោម ហើយផ្ទេរប្រាក់ <b>${amount:.2f}</b>\n"
+        f"📸 <b>ផ្ញើ screenshot វិក័យប័ត្រ (receipt) ត្រឡប់មកវិញនៅសារបន្ទាប់</b> ដើម្បីឲ្យ Admin ត្រួតពិនិត្យ ហើយបញ្ចូលលុយចូល Wallet ជូន\n"
+        f"⏳ ការបញ្ចូលលុយនឹងចំណាយពេលបន្តិច ព្រោះត្រូវផ្ទៀងផ្ទាត់ដោយ Admin ដោយផ្ទាល់ (មិនមែន auto ដូច Bakong ទេ)"
+    )
+    msg = bot.send_photo(chat_id, qr_file_id, caption=caption)
+    bot.register_next_step_handler(msg, _deposit_receipt_step, uid, chat_id, amount, dep_id, user_obj)
+
+
+def _deposit_receipt_step(message, uid, chat_id, amount, dep_id, user_obj):
+    """ទទួល screenshot វិក័យប័ត្រពី user (បន្ទាប់ពីទូទាត់ QR ផ្ទាល់ខ្លួន) → ផ្ញើបន្តទៅ Admin
+    ព្រមទាំងប៊ូតុង ✅ បញ្ជាក់ / ❌ បដិសេធ ដើម្បីឲ្យ Admin ត្រួតពិនិត្យ ហើយបញ្ចូលលុយចូល Wallet ដោយដៃ។"""
+    rec = get_pending_deposit(dep_id)
+    if not rec or rec.get("status") != "pending":
+        bot.send_message(chat_id, "❌ សំណើដាក់លុយនេះលែងមានសុពលភាពទៀតហើយ សូម /deposit ម្តងទៀត")
+        return
+    file_id = None
+    if message.photo:
+        file_id = message.photo[-1].file_id
+    elif message.document:
+        file_id = message.document.file_id
+    if not file_id:
+        msg = bot.send_message(
+            chat_id,
+            "📸 សូមផ្ញើជា <b>រូបភាព (Photo/Screenshot)</b> នៃវិក័យប័ត្រ ដែលបញ្ជាក់ថាបានទូទាត់រួច សូមផ្ញើម្តងទៀត:",
+        )
+        bot.register_next_step_handler(msg, _deposit_receipt_step, uid, chat_id, amount, dep_id, user_obj)
+        return
+
+    update_pending_deposit(dep_id, receipt_file_id=file_id)
+    bot.send_message(
+        chat_id,
+        "✅ បានទទួលវិក័យប័ត្ររបស់អ្នករួចហើយ។ សូមរង់ចាំ Admin ត្រួតពិនិត្យ ហើយបញ្ចូលលុយចូល Wallet ជូន (មិនយូរប៉ុន្មាន)។",
+    )
+
+    admin_kb = types.InlineKeyboardMarkup(row_width=2)
+    admin_kb.add(
+        pbtn(f"✅ បញ្ជាក់ +${amount:.2f}", callback_data=f"depapprove_{dep_id}", style="success"),
+        pbtn("❌ បដិសេធ", callback_data=f"depreject_{dep_id}", style="danger"),
+    )
+    try:
+        bot.send_photo(
+            ADMIN_ID,
+            file_id,
+            caption=(
+                f"📨 <b>វិក័យប័ត្រ Deposit ថ្មី</b>\n"
+                f"👤 {public_user_label(user_obj)} (<code>{uid}</code>)\n"
+                f"💵 ចំនួន: <b>${amount:.2f}</b>\n"
+                f"🔖 <code>{rec.get('ref')}</code>\n\n"
+                f"សូមផ្ទៀងផ្ទាត់ថាបានទទួលប្រាក់ពិតមុននឹងចុច 'បញ្ជាក់'។"
+            ),
+            reply_markup=admin_kb,
+        )
+    except Exception as e:
+        print(f"[_deposit_receipt_step] failed to notify admin: {e}", flush=True)
+
+
+def _handle_deposit_approve(call, dep_id):
+    rec = get_pending_deposit(dep_id)
+    if not rec:
+        bot.answer_callback_query(call.id, "❌ រកមិនឃើញសំណើនេះទេ", show_alert=True)
+        return
+    if rec.get("status") != "pending":
+        bot.answer_callback_query(call.id, f"ℹ️ សំណើនេះត្រូវបានដោះស្រាយរួចហើយ ({rec.get('status')})", show_alert=True)
+        return
+    uid = rec["uid"]
+    amount = rec["amount"]
+    new_balance = update_balance(uid, amount)
+    update_pending_deposit(dep_id, status="approved")
+    try:
+        bot.send_message(
+            uid,
+            f"✅ ការទូទាត់ត្រូវបានបញ្ជាក់! បញ្ចូល <b>${amount:.2f}</b> ចូល wallet។\n"
+            f"💰 សមតុល្យថ្មី: <b>${new_balance:.2f}</b>",
+        )
+    except Exception:
+        pass
+    notify_public(f"💰 <b>Deposit ជោគជ័យ!</b>\n👤 User {uid}\n💵 ${amount:.2f}")
+    ref_uid, bonus = credit_referral_commission(uid, amount)
+    if ref_uid:
+        try:
+            bot.send_message(
+                int(ref_uid),
+                f"🎉 <b>Referral Commission!</b>\n\n"
+                f"👤 អ្នកដែលអ្នកណែនាំ បានដាក់លុយ ${amount:.2f}\n"
+                f"💵 អ្នកទទួលបាន <b>${bonus:.2f}</b> ({REFERRAL_PERCENT:.0f}%) ចូល wallet ស្វ័យប្រវត្តិ!",
+            )
+        except Exception:
+            pass
+    bot.answer_callback_query(call.id, "✅ បានបញ្ជាក់ ហើយបញ្ចូលលុយចូល Wallet ជូនរួចរាល់")
+    try:
+        new_caption = (call.message.caption or "") + "\n\n✅ <b>បានបញ្ជាក់រួចរាល់</b>"
+        bot.edit_message_caption(new_caption, chat_id=call.message.chat.id, message_id=call.message.message_id)
+    except Exception:
+        pass
+
+
+def _handle_deposit_reject(call, dep_id):
+    rec = get_pending_deposit(dep_id)
+    if not rec:
+        bot.answer_callback_query(call.id, "❌ រកមិនឃើញសំណើនេះទេ", show_alert=True)
+        return
+    if rec.get("status") != "pending":
+        bot.answer_callback_query(call.id, f"ℹ️ សំណើនេះត្រូវបានដោះស្រាយរួចហើយ ({rec.get('status')})", show_alert=True)
+        return
+    uid = rec["uid"]
+    amount = rec["amount"]
+    update_pending_deposit(dep_id, status="rejected")
+    try:
+        bot.send_message(
+            uid,
+            f"❌ វិក័យប័ត្រ Deposit ${amount:.2f} របស់អ្នកមិនត្រូវបានបញ្ជាក់ទេ។\n"
+            f"សូមទាក់ទង Admin ប្រសិនបើអ្នកគិតថាមានកំហុស ឬសាកល្បង /deposit ម្តងទៀត",
+        )
+    except Exception:
+        pass
+    bot.answer_callback_query(call.id, "❌ បានបដិសេធសំណើនេះ")
+    try:
+        new_caption = (call.message.caption or "") + "\n\n❌ <b>បានបដិសេធ</b>"
+        bot.edit_message_caption(new_caption, chat_id=call.message.chat.id, message_id=call.message.message_id)
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------
@@ -3096,6 +3352,61 @@ def admin_setrentalprice_step(message):
         return
     new_price = set_rental_per_day(value)
     bot.send_message(message.chat.id, f"✅ តម្លៃជួល Bot ថ្មី: <b>${new_price:.2f}</b>/ថ្ងៃ")
+
+
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_SETQR))
+def reply_admin_setqr(message):
+    if not is_admin(message.from_user.id):
+        return
+    _start_setqr_flow(message.chat.id)
+
+
+@bot.message_handler(commands=["setqr"])
+def cmd_setqr(message):
+    """Admin កំណត់ QR ទូទាត់ដោយដៃ (ប្រើសម្រាប់ user deposit ពេលហាងគ្មាន Bakong ID ខ្លួនឯង)"""
+    if not is_admin(message.from_user.id):
+        return
+    _start_setqr_flow(message.chat.id)
+
+
+def _start_setqr_flow(chat_id):
+    qr_file_id, qr_note = get_manual_qr()
+    status = "✅ បច្ចុប្បន្នមាន QR កំណត់រួចហើយ" if qr_file_id else "⚠️ បច្ចុប្បន្នមិនទាន់កំណត់ QR ណាមួយទេ"
+    msg = bot.send_message(
+        chat_id,
+        f"🖼 <b>កំណត់ QR ទូទាត់ដោយដៃ</b>\n{status}\n\n"
+        f"ប្រើសម្រាប់ deposit ករណីហាងគ្មាន Bakong ID ផ្ទាល់ខ្លួន (គ្មាន auto-detect) — "
+        f"user scan QR នេះ ទូទាត់ រួចផ្ញើ screenshot មកឲ្យអ្នកបញ្ជាក់ដោយដៃ។\n\n"
+        f"📸 សូមផ្ញើជា <b>រូបភាព (Photo)</b> នៃ QR ដែលអ្នកចង់ប្រើ (ABA/Wing/ACLEDA... QR អីក៏បាន):",
+    )
+    bot.register_next_step_handler(msg, admin_setqr_photo_step)
+
+
+def admin_setqr_photo_step(message):
+    if not is_admin(message.from_user.id):
+        return
+    if not message.photo:
+        msg = bot.send_message(message.chat.id, "❌ សូមផ្ញើជា <b>រូបភាព (Photo)</b> នៃ QR មិនមែនឯកសារ/អត្ថបទទេ សូមផ្ញើម្តងទៀត:")
+        bot.register_next_step_handler(msg, admin_setqr_photo_step)
+        return
+    qr_file_id = message.photo[-1].file_id
+    msg = bot.send_message(
+        message.chat.id,
+        "✅ បានទទួលរូបភាព QR រួចហើយ។\n\n"
+        "ℹ️ សូមវាយបញ្ចូល <b>ចំណាំបន្ថែម</b> ដែលចង់ឲ្យ user ឃើញរួមជាមួយ QR (ឧ. ឈ្មោះគណនី/លេខទូរស័ព្ទ)\n"
+        "ឬវាយ <code>-</code> បើមិនចង់មានចំណាំបន្ថែម:",
+    )
+    bot.register_next_step_handler(msg, admin_setqr_note_step, qr_file_id)
+
+
+def admin_setqr_note_step(message, qr_file_id):
+    if not is_admin(message.from_user.id):
+        return
+    note = (message.text or "").strip()
+    if note == "-":
+        note = ""
+    set_manual_qr(qr_file_id, note=note)
+    bot.send_message(message.chat.id, "✅ បានកំណត់ QR ទូទាត់ដោយដៃរួចរាល់! User នឹងឃើញ QR នេះពេលចុច ➕ បញ្ចូលលុយ (ករណីគ្មាន Bakong auto-payment)។")
 
 
 @bot.message_handler(commands=["broadcast"])
