@@ -25,11 +25,14 @@ Kairozen Premium Account Shop Bot
 import os
 import re
 import io
+import sys
 import html
 import json
 import time
+import signal
 import hashlib
 import threading
+import subprocess
 import requests
 import telebot
 from telebot import types
@@ -49,7 +52,7 @@ CAMRAPID_WEBHOOK_URL = os.environ.get(
     "CAMRAPID_WEBHOOK_URL",
     f"{PUBLIC_BASE_URL.rstrip('/')}/camrapid-webhook" if PUBLIC_BASE_URL else "",
 )
-STORE_NAME = "Kairozen Store"  # ឈ្មោះហាង — ដាក់ hardcode ត្រង់នេះ (មិនប្រើ env var ទៀតទេ)
+STORE_NAME = os.environ.get("STORE_NAME", "Kairozen Store")  # ឈ្មោះហាង — hardcode ជា default តែអាច override តាម env (ចាំបាច់សម្រាប់ bot subscriber clone)
 # ភាគរយ commission ដែលអ្នកណែនាំ (referrer) ទទួលបាន រាល់ពេលអ្នកដែលខ្លួនណែនាំ (referred user)
 # ដាក់លុយចូល wallet ជោគជ័យ (ឧ. 5 មានន័យថា ណែនាំគេដាក់ $10 → ខ្លួនឯងទទួល $0.50 ចូល wallet
 # ស្វ័យប្រវត្តិ)។ អាចកែបានតាម Env Var REFERRAL_PERCENT
@@ -58,10 +61,18 @@ REFERRAL_PERCENT = float(os.environ.get("REFERRAL_PERCENT", "5"))
 # ឬ order ជោគជ័យ។ ដាក់ hardcode ត្រង់នេះផ្ទាល់ (negative number ឧ. -1001234567890
 # សម្រាប់ channel/supergroup) — អាចដាក់ច្រើនក្នុងមួយ list បាន ១ សម្រាប់ channel ១ សម្រាប់ group។
 # ចាំបាច់: bot ត្រូវជា admin (មាន permission ផ្ញើសារ) នៅក្នុង channel/group នោះជាមុនសិន។
-NOTIFY_CHAT_IDS = [
-    -1004440559295,   # <- Kairozen Store
-    # -1002222222222,   # <- ដាក់ ID ទីពីរនៅទីនេះ បើមាន channel/group ថែមទៀត
-]
+_NOTIFY_CHAT_IDS_ENV = os.environ.get("NOTIFY_CHAT_IDS")
+if _NOTIFY_CHAT_IDS_ENV is not None:
+    # បើកំណត់ env var (សូម្បីជា string ទទេ) → override list hardcode ខាងក្រោម
+    # ចាំបាច់សម្រាប់ bot subscriber clone ដើម្បីកុំឲ្យវាផ្ញើសារចូល channel របស់ហាងមេ
+    NOTIFY_CHAT_IDS = [
+        int(x.strip()) for x in _NOTIFY_CHAT_IDS_ENV.split(",") if x.strip()
+    ]
+else:
+    NOTIFY_CHAT_IDS = [
+        -1004440559295,   # <- Kairozen Store
+        # -1002222222222,   # <- ដាក់ ID ទីពីរនៅទីនេះ បើមាន channel/group ថែមទៀត
+    ]
 
 # ពេលស្តុក product មួយធ្លាក់មកដល់ចំនួននេះ ឬតិចជាងនេះ (ប៉ុន្តែមិនទាន់អស់ស្រុង) bot នឹងផ្ញើសារ
 # ជូនដំណឹងទៅ user គ្រប់គ្នា ដើម្បីជំរុញឲ្យទិញឲ្យឆាប់មុនអស់ស្តុក (មួយដងក្នុងមួយជុំស្តុក —
@@ -434,6 +445,87 @@ def set_sub(uid, **fields):
         subs[str(uid)] = rec
         save_subs(subs)
         return rec
+
+
+# ------------------------------------------------------------------
+# BOT SUBSCRIPTION — auto-deploy engine (spawn subprocess ស្វ័យប្រវត្តិ)
+# ------------------------------------------------------------------
+# ពេល admin ចុច "✅ បានដាក់ Bot ជូនរួចរាល់" bot នេះនឹង spawn process ថ្មីមួយ ជា
+# copy ដដែលនៃ script នេះ (ប្រើ __file__ ដដែល) តែផ្លាស់ប្តូរ Environment Variables ដូចជា
+# BOT_TOKEN / ADMIN_ID / DATA_DIR ជាដើម ដើម្បីឲ្យវាដំណើរការជា bot ដាច់ដោយឡែកសម្រាប់ subscriber។
+# process ចាំបាច់ត្រូវជា detached (start_new_session=True) ដើម្បីកុំឲ្យ Render/OS បិទវា
+# ពេល process មេ (bot នេះ) restart ។
+SUBBOTS_DIR = os.path.join(DATA_DIR, "subscriber_bots")
+os.makedirs(SUBBOTS_DIR, exist_ok=True)
+
+
+def _sub_data_dir(uid):
+    d = os.path.join(SUBBOTS_DIR, str(uid))
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _pid_alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, ValueError, TypeError):
+        return False
+    return True
+
+
+def stop_subscriber_bot(uid):
+    """បញ្ឈប់ process bot របស់ subscriber (បើកំពុងរត់) — ប្រើមុន redeploy ថ្មី ឬពេលចង់បិទ"""
+    rec = get_sub(uid) or {}
+    pid = rec.get("process_pid")
+    if pid and _pid_alive(pid):
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except Exception as e:
+            print(f"[stop_subscriber_bot] failed to kill pid {pid} for uid {uid}: {e}", flush=True)
+    set_sub(uid, process_pid=None)
+
+
+def deploy_subscriber_bot(uid, rec=None):
+    """Spawn ស្វ័យប្រវត្តិនូវ bot instance ផ្ទាល់ខ្លួនរបស់ subscriber (uid) ជា subprocess ដាច់ដោយឡែក
+    ដោយប្រើ Bot Token + (បើមាន) CAMRAPIDPAY_API_KEY ផ្ទាល់ខ្លួន។ Return (True, pid) ឬ (False, error_text)"""
+    rec = rec or get_sub(uid) or {}
+    bot_token = rec.get("bot_token")
+    if not bot_token:
+        return False, "គ្មាន Bot Token ក្នុង record នេះទេ"
+    stop_subscriber_bot(uid)  # បញ្ឈប់ process ចាស់ (បើមាន) មុន redeploy
+    data_dir = _sub_data_dir(uid)
+    env = os.environ.copy()
+    env["BOT_TOKEN"] = bot_token
+    env["ADMIN_ID"] = str(uid)
+    env["DATA_DIR"] = data_dir
+    env["CAMRAPIDPAY_API_KEY"] = rec.get("camrapidpay_api_key") or ""
+    env["NOTIFY_CHAT_IDS"] = ""  # subscriber bot មិនផ្ញើសារចូល channel ហាងមេទេ
+    env["STORE_NAME"] = rec.get("store_name") or f"Shop #{uid}"
+    script_path = os.path.abspath(__file__)
+    log_path = os.path.join(data_dir, "bot.log")
+    try:
+        log_f = open(log_path, "a")
+        proc = subprocess.Popen(
+            [sys.executable, script_path],
+            env=env,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,  # detach ពី process មេ ដើម្បីកុំឲ្យស្លាប់តាម
+            cwd=os.path.dirname(script_path),
+        )
+    except Exception as e:
+        return False, str(e)
+    set_sub(
+        uid,
+        status="active",
+        activated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        process_pid=proc.pid,
+        process_data_dir=data_dir,
+    )
+    return True, proc.pid
 
 
 # ------------------------------------------------------------------
@@ -1290,7 +1382,7 @@ def _looks_like_bot_token(text):
 
 
 def subscribe_token_step(message, from_user):
-    """ទទួល Bot Token ពី user → រក្សាទុកបណ្តោះអាសន្ន ហើយសួរថាតើមាន Bakong ID ខ្លួនឯងឬអត់"""
+    """ទទួល Bot Token ពី user → រក្សាទុកបណ្តោះអាសន្ន ហើយសួរឈ្មោះហាងដែលចង់ដាក់"""
     uid = from_user.id
     chat_id = message.chat.id
     token = (message.text or "").strip()
@@ -1304,17 +1396,45 @@ def subscribe_token_step(message, from_user):
         return
     set_sub(
         uid,
-        status="collecting_bakong_choice",
+        status="collecting_store_name",
         bot_token=token,
+        store_name=None,
         bakong_id=None,
         rental_days=None,
         amount_paid=None,
         requested_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         activated_at=None,
     )
+    msg = bot.send_message(
+        chat_id,
+        "✅ បានទទួល Token រួចហើយ។\n\n"
+        "🏪 សូមវាយបញ្ចូល <b>ឈ្មោះហាង</b> ដែលអ្នកចង់ដាក់ (ឧ. Dara Store) — "
+        "ឈ្មោះនេះនឹងបង្ហាញក្នុង Bot របស់អ្នកផ្ទាល់:",
+    )
+    bot.register_next_step_handler(msg, subscribe_storename_step, from_user)
+
+
+def subscribe_storename_step(message, from_user):
+    """ទទួលឈ្មោះហាងពី user → រក្សាទុក ហើយបន្តសួរថាតើមាន Bakong ID ខ្លួនឯងឬអត់"""
+    uid = from_user.id
+    chat_id = message.chat.id
+    store_name = (message.text or "").strip()
+    if not store_name or store_name.startswith("/") or len(store_name) > 40:
+        msg = bot.send_message(
+            chat_id,
+            "❌ ឈ្មោះហាងមិនត្រឹមត្រូវទេ (មិនអាចទទេ ឬលើសពី 40 តួអក្សរ) សូមវាយបញ្ចូលម្តងទៀត:",
+        )
+        bot.register_next_step_handler(msg, subscribe_storename_step, from_user)
+        return
+    rec = get_sub(uid) or {}
+    if not rec.get("bot_token"):
+        bot.send_message(chat_id, "❌ រកមិនឃើញ Token ដែលបានផ្ញើមុននេះទេ សូមចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ម្តងទៀត")
+        return
+    set_sub(uid, status="collecting_bakong_choice", store_name=store_name)
     bot.send_message(
         chat_id,
-        "✅ បានទទួល Token រួចហើយ។\n\nតើអ្នកមាន <b>Bakong ID</b> ផ្ទាល់ខ្លួនសម្រាប់ទទួលទូទាត់ក្នុង Bot នេះទេ?\n"
+        f"✅ ឈ្មោះហាង: <b>{html.escape(store_name)}</b>\n\n"
+        "តើអ្នកមាន <b>Bakong ID</b> ផ្ទាល់ខ្លួនសម្រាប់ទទួលទូទាត់ក្នុង Bot នេះទេ?\n"
         "• មាន → បំពេញ Bakong ID (Admin នឹងបំពេញ API CamRapidPay ជូន ដើម្បីបង្កើត QR ស្វ័យប្រវត្តិ)\n"
         "• អត់មាន → ផ្ញើរូបភាព QR ផ្ទាល់ខ្លួន រួចជួលដំណើរការគិតជាថ្ងៃ "
         f"(${get_rental_per_day():.2f}/ថ្ងៃ) បង់ពី Wallet",
@@ -1343,7 +1463,7 @@ def subscribe_bakong_id_step(message, from_user):
         "⏳ សូមរង់ចាំ Admin បំពេញ API CamRapidPay ជូន ដើម្បីឲ្យ Bot របស់អ្នកបង្កើត QR ស្វ័យប្រវត្តិបាន — "
         "bot នឹងជូនដំណឹងភ្លាមៗពេលរួចរាល់។",
     )
-    _notify_admin_new_sub(uid, from_user, rec.get("bot_token"), bakong_id=bakong_id)
+    _notify_admin_new_sub(uid, from_user, rec.get("bot_token"), store_name=rec.get("store_name"), bakong_id=bakong_id)
 
 
 def subscribe_qr_photo_step(message, from_user):
@@ -1400,16 +1520,42 @@ def subscribe_days_step(message, from_user):
         f"⏳ សូមរង់ចាំ Admin ដាក់ Bot ឲ្យអ្នកដំណើរការ — bot នឹងជូនដំណឹងភ្លាមៗពេលរួចរាល់។",
     )
     _notify_admin_new_sub(
-        uid, from_user, rec.get("bot_token"),
+        uid, from_user, rec.get("bot_token"), store_name=rec.get("store_name"),
         rental_days=days, amount_paid=total, qr_photo_file_id=rec.get("qr_photo_file_id"),
     )
 
 
-def _notify_admin_new_sub(uid, from_user, bot_token, bakong_id=None, rental_days=None, amount_paid=None, qr_photo_file_id=None):
+def admin_subdeploy_apikey_step(message, target_uid):
+    """ទទួល CAMRAPIDPAY_API_KEY ពី admin (សម្រាប់ subscriber ដែលមាន Bakong ID ខ្លួនឯង)
+    រួច spawn subprocess ស្វ័យប្រវត្តិ"""
+    if not is_admin(message.from_user.id):
+        return
+    api_key = (message.text or "").strip()
+    if not api_key or api_key.startswith("/"):
+        msg = bot.send_message(message.chat.id, "❌ សូមផ្ញើ CAMRAPIDPAY_API_KEY ត្រឹមត្រូវ:")
+        bot.register_next_step_handler(msg, admin_subdeploy_apikey_step, target_uid)
+        return
+    set_sub(target_uid, camrapidpay_api_key=api_key)
+    ok, info = deploy_subscriber_bot(target_uid, get_sub(target_uid))
+    if not ok:
+        bot.send_message(message.chat.id, f"❌ Deploy បរាជ័យសម្រាប់ user {target_uid}: {info}")
+        return
+    bot.send_message(message.chat.id, f"✅ Bot user <code>{target_uid}</code> កំពុងដំណើរការ (PID {info})")
+    try:
+        bot.send_message(
+            target_uid,
+            "🎉 <b>Bot ជួលរបស់អ្នកដំណើរការរួចរាល់!</b>\nសូមចូលទៅកាន់ Bot របស់អ្នកបាន។",
+        )
+    except Exception as e:
+        print(f"[admin_subdeploy_apikey_step] failed to notify user: {e}", flush=True)
+
+
+def _notify_admin_new_sub(uid, from_user, bot_token, store_name=None, bakong_id=None, rental_days=None, amount_paid=None, qr_photo_file_id=None):
     lines = [
         "🤖 <b>សំណើជាវ Bot ថ្មី!</b>",
         "",
         f"👤 User: {public_user_label(from_user)} (<code>{uid}</code>)",
+        f"🏪 ឈ្មោះហាង: <b>{html.escape(store_name or '')}</b>",
         f"🔑 Bot Token: <code>{html.escape(bot_token or '')}</code>",
     ]
     if bakong_id:
@@ -1747,8 +1893,26 @@ def callback_router(call):
             bot.answer_callback_query(call.id)
             return
         target_uid = int(data[len("subdeploy_"):])
-        set_sub(target_uid, status="active", activated_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-        bot.answer_callback_query(call.id, "✅ បានកំណត់ជា Active")
+        rec = get_sub(target_uid) or {}
+        if rec.get("bakong_id") and not rec.get("camrapidpay_api_key"):
+            # ត្រូវការ CAMRAPIDPAY_API_KEY ដែល admin បង្កើតឲ្យ bakong_id នេះនៅ CamRapidPay
+            # dashboard ជាមុនសិន — ជំហាននេះនៅតែធ្វើដោយដៃ ព្រោះជា step ក្រៅ Telegram
+            bot.answer_callback_query(call.id)
+            msg = bot.send_message(
+                call.message.chat.id,
+                f"🔑 User <code>{target_uid}</code> មាន Bakong ID ផ្ទាល់ខ្លួន "
+                f"(<code>{html.escape(rec.get('bakong_id',''))}</code>)។\n"
+                f"សូមផ្ញើ <b>CAMRAPIDPAY_API_KEY</b> ដែលបានបង្កើតឲ្យគាត់រួច ដើម្បីឲ្យ bot deploy ស្វ័យប្រវត្តិ:",
+            )
+            bot.register_next_step_handler(msg, admin_subdeploy_apikey_step, target_uid)
+            return
+        ok, info = deploy_subscriber_bot(target_uid, rec)
+        if ok:
+            bot.answer_callback_query(call.id, "✅ បាន Deploy ស្វ័យប្រវត្តិ")
+        else:
+            bot.answer_callback_query(call.id, "❌ Deploy បរាជ័យ")
+            bot.send_message(call.message.chat.id, f"❌ Deploy បរាជ័យសម្រាប់ user {target_uid}: {info}")
+            return
         try:
             bot.send_message(
                 target_uid,
@@ -2559,42 +2723,81 @@ def cmd_addbalance(message):
 
 @bot.message_handler(commands=["activatesub"])
 def cmd_activatesub(message):
-    """Admin fallback ដៃ បើប៊ូតុង '✅ បានដាក់ Bot ជូនរួចរាល់' បាត់ ឬចង់ activate ដោយផ្ទាល់"""
+    """Admin fallback ដៃ បើប៊ូតុង '✅ បានដាក់ Bot ជូនរួចរាល់' បាត់ ឬចង់ deploy ដោយផ្ទាល់តាម command
+    ទំរង់: /activatesub user_id  ឬ  /activatesub user_id|camrapidpay_api_key (បើមាន Bakong ID ខ្លួនឯង)"""
     if not is_admin(message.from_user.id):
         return
     try:
-        _, target_uid_s = message.text.split(" ", 1)
-        target_uid = int(target_uid_s.strip())
-        set_sub(target_uid, status="active", activated_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-        bot.reply_to(message, f"✅ Activate subscription ជូន user {target_uid} រួចរាល់។")
+        _, rest = message.text.split(" ", 1)
+        parts = rest.strip().split("|", 1)
+        target_uid = int(parts[0].strip())
+        rec = get_sub(target_uid) or {}
+        if len(parts) > 1 and parts[1].strip():
+            set_sub(target_uid, camrapidpay_api_key=parts[1].strip())
+            rec = get_sub(target_uid)
+        ok, info = deploy_subscriber_bot(target_uid, rec)
+        if not ok:
+            bot.reply_to(message, f"❌ Deploy បរាជ័យ: {info}")
+            return
+        bot.reply_to(message, f"✅ Deploy user {target_uid} រួចរាល់ (PID {info})។")
         bot.send_message(
             target_uid,
             "🎉 <b>Bot ជួលរបស់អ្នកដំណើរការរួចរាល់!</b>\nសូមចូលទៅកាន់ Bot របស់អ្នកបាន។",
         )
     except Exception:
-        bot.reply_to(message, "ទំរង់ត្រូវជា:\n/activatesub user_id")
+        bot.reply_to(message, "ទំរង់ត្រូវជា:\n/activatesub user_id\nឬ /activatesub user_id|camrapidpay_api_key")
+
+
+@bot.message_handler(commands=["stopsub"])
+def cmd_stopsub(message):
+    """Admin បញ្ឈប់ process bot របស់ subscriber មួយ (ដោយមិនលុប record ចោល — deploy ម្តងទៀតបានតាមក្រោយ)"""
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        _, target_uid_s = message.text.split(" ", 1)
+        target_uid = int(target_uid_s.strip())
+        stop_subscriber_bot(target_uid)
+        bot.reply_to(message, f"🛑 បានបញ្ឈប់ Bot user {target_uid} រួចរាល់។")
+    except Exception:
+        bot.reply_to(message, "ទំរង់ត្រូវជា:\n/stopsub user_id")
 
 
 @bot.message_handler(commands=["subs"])
 def cmd_subs(message):
-    """Admin មើលបញ្ជីសំណើជាវ Bot ដែលកំពុងរង់ចាំ (Bot Token + Bakong ID ឬ ចំនួនថ្ងៃដែលបានបង់)"""
+    """Admin មើលបញ្ជីសំណើជាវ Bot ដែលកំពុងរង់ចាំ + បញ្ជី Bot ដែល active (ដោយបង្ហាញថាតើ process
+    កំពុងរត់ពិតឬអត់ តាម PID)"""
     if not is_admin(message.from_user.id):
         return
     subs = load_subs()
     pending = {uid: s for uid, s in subs.items() if s.get("status") == "waiting_admin_deploy"}
-    if not pending:
-        bot.reply_to(message, "✅ គ្មានសំណើជាវ Bot ដែលកំពុងរង់ចាំទេ")
+    active = {uid: s for uid, s in subs.items() if s.get("status") == "active"}
+    lines = []
+    if pending:
+        lines.append("⏳ <b>សំណើជាវ Bot កំពុងរង់ចាំ:</b>")
+        for uid, s in pending.items():
+            tag = (
+                f"🏦 {s.get('bakong_id')}" if s.get("bakong_id")
+                else f"📅 {s.get('rental_days')} ថ្ងៃ (${s.get('amount_paid', 0):.2f})"
+                + (" 🖼QR" if s.get("qr_photo_file_id") else "")
+            )
+            lines.append(
+                f"• <code>{uid}</code> — 🏪 {html.escape(s.get('store_name') or '(គ្មានឈ្មោះ)')} — {tag}\n"
+                f"  🔑 <code>{html.escape(s.get('bot_token', ''))}</code> — {s.get('requested_at', '')}"
+            )
+    if active:
+        if lines:
+            lines.append("")
+        lines.append("🟢 <b>Bot Active:</b>")
+        for uid, s in active.items():
+            running = _pid_alive(s.get("process_pid"))
+            status_icon = "🟢 កំពុងរត់" if running else "🔴 process ស្លាប់ (សូម /activatesub redeploy)"
+            lines.append(
+                f"• <code>{uid}</code> — 🏪 {html.escape(s.get('store_name') or '(គ្មានឈ្មោះ)')} "
+                f"— PID {s.get('process_pid')} — {status_icon}"
+            )
+    if not lines:
+        bot.reply_to(message, "✅ គ្មានសំណើ ឬ Bot active ណាមួយទេ")
         return
-    lines = ["⏳ <b>សំណើជាវ Bot កំពុងរង់ចាំ:</b>"]
-    for uid, s in pending.items():
-        tag = (
-            f"🏦 {s.get('bakong_id')}" if s.get("bakong_id")
-            else f"📅 {s.get('rental_days')} ថ្ងៃ (${s.get('amount_paid', 0):.2f})"
-            + (" 🖼QR" if s.get("qr_photo_file_id") else "")
-        )
-        lines.append(
-            f"• <code>{uid}</code> — {tag}\n  🔑 <code>{html.escape(s.get('bot_token', ''))}</code> — {s.get('requested_at', '')}"
-        )
     bot.reply_to(message, "\n".join(lines))
 
 
