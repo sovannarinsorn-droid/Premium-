@@ -14,6 +14,16 @@ Kairozen Premium Account Shop Bot
   CAMRAPIDPAY_API_KEY  - API key របស់ CamRapidPay (ចាំបាច់សម្រាប់ deposit តាម Bakong KHQR)
   CAMRAPID_CREATE_URL / CAMRAPID_CHECK_URL / PUBLIC_BASE_URL - កំណត់ webhook_url សម្រាប់ CamRapidPay
 
+ចំណាំ (v14): រកឃើញ+កែ bug ជាប្រព័ន្ធ ២ បន្ថែម (ក្រោយ v13 នៅតែមាន /start ស្ងាត់ដោយ
+  ENTITY_TEXT_INVALID)៖ (1) _is_entity_parse_error() ចាស់ចាប់តែ "can't parse entities"
+  ប៉ុណ្ណោះ មិនចាប់ "ENTITY_TEXT_INVALID" (custom_emoji_id ខូច/លែងមាន) ធ្វើឲ្យ retry
+  fallback មិនដំណើរការ — ពង្រីកជា catch ពាក្យ "entit" ទាំងអស់។ (2) _save() (សរសេរ
+  products.json/users.json/orders.json) ចាស់សរសេរ open(path,"w") ត្រង់ៗគ្មាន lock —
+  ២ សរសេរដំណាលគ្នា (admin កែ product + user ទិញក្នុងពេលតែមួយ) អាចធ្វើឲ្យឯកសារខូច/ទទេ
+  បាត់ទិន្នន័យទាំងអស់ — កែជា temp-file + os.replace() (atomic) ព្រមទាំង lock ជាមួយ។ _lock
+  ក៏ប្តូរពី Lock ទៅ RLock ដើម្បីកុំឲ្យ deadlock ជាមួយកន្លែងចាស់ៗដែលមាន "with _lock:" រួច
+  ជុំវិញ save_products()/save_users() ស្រាប់។ បន្ថែម bot.edit_message_caption ចូល
+  ប្រព័ន្ធការពារ entity-error ដូចគ្នា (មុននេះមិនមាន fallback ទេ)។
 ចំណាំ (v13): Mini App ឥឡូវជាច្រកចូលតែមួយគត់ — /start បង្ហាញប៊ូតុង web_app តែមួយ (ចាស់ៗ
   ម៉ឺនុយ/admin reply-keyboard ដាច់ៗត្រូវបានដក)។ Admin panel (product/stock/broadcast) ស្ថិត
   ក្នុង Mini App ទាំងអស់។ Add stock ពី Mini App ឥឡូវ broadcast ស្តុកថ្មីទៅ user ទាំងអស់ស្វ័យប្រវត្តិ
@@ -408,10 +418,12 @@ _orig_send_document = bot.send_document
 
 
 def _is_entity_parse_error(exc):
-    """រកមើលថាតើ exception នេះជា Telegram 'can't parse entities' (HTML ខូច) ដែរឬអត់
-    — បើដូច្នេះមែន គួរតែ retry ដោយអត្ថបទធម្មតា (គ្មាន premium_text) ជាជាងឲ្យសារបាត់សោះ"""
+    """រកមើលថាតើ exception នេះទាក់ទងនឹង tg-emoji/entity ដែរឬអត់ (ឧ. "can't parse
+    entities" ព្រោះ HTML ខូច ឬ "ENTITY_TEXT_INVALID" ព្រោះ custom_emoji_id ខ្លួនឯង
+    មិនត្រឹមត្រូវ/លែងមាន) — ករណីណាក៏ដោយ គួរតែ retry ដោយអត្ថបទធម្មតា (គ្មាន premium_text/
+    tg-emoji tag ទាល់តែសោះ) ជាជាងឲ្យសារបាត់សោះទាំងស្រុង"""
     msg = str(exc).lower()
-    return "can't parse entities" in msg or "can’t parse entities" in msg
+    return "entit" in msg  # គ្របដណ្តប់ "entities"/"entity"/"ENTITY_TEXT_INVALID" ទាំងអស់
 
 
 def _patched_send_message(chat_id, text=None, *args, **kwargs):
@@ -474,9 +486,23 @@ def _patched_send_document(chat_id, document, caption=None, *args, **kwargs):
         raise
 
 
+_orig_edit_message_caption = bot.edit_message_caption
+
+
+def _patched_edit_message_caption(caption=None, *args, **kwargs):
+    try:
+        return _orig_edit_message_caption(premium_text(caption), *args, **kwargs)
+    except Exception as e:
+        if _is_entity_parse_error(e):
+            print(f"[premium_text] entity parse failed, retrying plain caption: {e}", flush=True)
+            return _orig_edit_message_caption(caption, *args, **kwargs)
+        raise
+
+
 bot.send_message = _patched_send_message
 bot.reply_to = _patched_reply_to
 bot.edit_message_text = _patched_edit_message_text
+bot.edit_message_caption = _patched_edit_message_caption
 bot.send_photo = _patched_send_photo
 bot.send_video = _patched_send_video
 bot.send_document = _patched_send_document
@@ -484,7 +510,10 @@ bot.send_document = _patched_send_document
 # ------------------------------------------------------------------
 # STORAGE HELPERS
 # ------------------------------------------------------------------
-_lock = threading.Lock()
+_lock = threading.RLock()  # RLock (មិនមែន Lock ធម្មតា) ព្រោះកូដមានច្រើនកន្លែងហៅ
+# save_products()/save_users() (ដែលឥឡូវក៏ acquire _lock ដែរ) ពីខាងក្នុង "with _lock:"
+# រួចស្រាប់ — Lock ធម្មតានឹង deadlock ខ្លួនឯង ចំណែក RLock អនុញ្ញាតឲ្យ thread ដដែល acquire
+# ជាន់គ្នាបាន
 
 
 def _load(path, default):
@@ -498,8 +527,22 @@ def _load(path, default):
 
 
 def _save(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """សរសេរឯកសារ JSON ដោយសុវត្ថិភាព៖ សរសេរទៅ temp file ជាមុន រួច os.replace() ត្រឡប់
+    ទៅឈ្មោះពិត (atomic rename)។ ចាំបាច់ណាស់ព្រោះកូដមានច្រើនកន្លែង (product edit, stock
+    add, purchase, admin API...) សរសេរ products.json/users.json ដោយផ្ទាល់ដោយគ្មាន lock —
+    បើ ២ ការសរសេរកើតឡើងដំណាលគ្នា (ឧ. admin កែ product ខណៈមាន user កំពុងទិញ) របៀបចាស់
+    (`open(path, "w")` ត្រង់ៗ) អាចធ្វើឲ្យឯកសារខូច/ទទេ (partial write) បាត់ទិន្នន័យទាំងអស់។
+    ការសរសេរទៅ temp file ជាមុន + rename (atomic លើ POSIX/Windows) ធានាថាឯកសារពិត
+    មិនដែលស្ថិតក្នុងស្ថានភាពសរសេរពាក់កណ្តាលឡើយ — ចុងក្រោយសរសេររួច ដឹងឈ្នះ (last-write-wins)
+    ជាជាងខូចទាំងអស់។ ចាក់សោ (_lock) ថែមទៀត ដើម្បីជៀសវាង thread ២ សរសេរដំណាលគ្នាត្រង់ temp
+    file ដូចគ្នា។"""
+    with _lock:
+        tmp_path = f"{path}.tmp{os.getpid()}"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
 
 
 def load_users():
