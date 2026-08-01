@@ -228,6 +228,38 @@ EMOJI_CATEGORIES = [
 
 
 
+# ------------------------------------------------------------------
+# Mini App (miniapp.html) ប្រើ Lucide icon *ឈ្មោះ* (ឧ. "clapperboard",
+# "headphones", "palette", "sparkles") រក្សាទុកក្នុង products[key]["icon"]
+# ជំនួសឲ្យ emoji glyph ធម្មតា — ចំណុចនេះដំណើរការត្រឹមត្រូវក្នុង Mini App
+# (ព្រោះវា render SVG តាមឈ្មោះ) ប៉ុន្តែ bot Telegram នៅតែសង្ឃឹមថា icon ជា
+# glyph ពិត។ បើមិនបំប្លែង Telegram នឹងបង្ហាញអក្សរ "clapperboard" ត្រង់ៗ
+# ជំនួសអោយ 🎬 ហើយ premium emoji ក៏មិនអាចផ្គូផ្គងបានដែរ (ព្រោះ emoji map
+# គឺ key ដោយ glyph ពិត មិនមែន text ទេ)។ LUCIDE_TO_EMOJI ដោះស្រាយចំណុចនេះ
+# — ត្រូវប្រើតែពេលបង្ហាញក្នុង Telegram (មិនប៉ះពាល់ទិន្នន័យដែល Mini App ប្រើ)។
+LUCIDE_TO_EMOJI = {
+    "bot": "🤖", "clapperboard": "🎬", "headphones": "🎧", "book-open": "📘",
+    "palette": "🎨", "key-round": "🔑", "shopping-bag": "🛍",
+    "package": "📦", "credit-card": "💳", "gamepad-2": "🎮", "smartphone": "📱",
+    "music-2": "🎵", "tv": "📺", "cloud": "☁️", "image": "🖼", "file-text": "📄",
+    "star": "⭐", "gem": "💎",
+    "camera": "📷", "mail": "✉️", "globe": "🌐", "sparkles": "✨",
+    "shield": "🛡", "zap": "⚡", "crown": "👑",
+}
+# ចំណាំ: បញ្ជីនេះត្រូវតែគ្របដណ្តប់ ICON_CHOICES ទាំងអស់ក្នុង miniapp.html (25 icon)
+# បើ Mini App បន្ថែម icon ថ្មីទៀត ត្រូវបន្ថែម mapping ត្រង់នេះផងដែរ មិនដូច្នេះទេ
+# icon ថ្មីនោះនឹងបង្ហាញជា text ឈ្មោះត្រង់ៗក្នុង Telegram វិញ (ដូចករណី clapperboard ពីមុន)
+
+
+def resolve_icon(icon):
+    """បម្លែង Lucide icon name (មកពី Mini App) ទៅជា emoji glyph សម្រាប់បង្ហាញ
+    ក្នុង Telegram។ បើ icon ជា glyph ស្រាប់ (មិនមែន Lucide name ដែលស្គាល់) នឹង
+    return ដដែលដោយមិនប៉ះពាល់អ្វី។"""
+    if not icon:
+        return "📦"
+    return LUCIDE_TO_EMOJI.get(icon, icon)
+
+
 def get_emoji_map():
     return _load(EMOJI_FILE, {})
 
@@ -1244,7 +1276,7 @@ def products_kb():
     kb = types.InlineKeyboardMarkup(row_width=1)
     for key, p in products.items():
         left = stock_count(key)
-        icon = p.get("icon", "📦")
+        icon = resolve_icon(p.get("icon", "📦"))
         if left > 0:
             label = f"{icon} {p['name'].upper()} - ${p['price']:.2f}"
             btn = pbtn(label, callback_data=f"buyopt_{key}", style="success")
@@ -1283,7 +1315,7 @@ def show_qty_picker(call, product_key, qty):
         bot.answer_callback_query(call.id, f"❌ {p['name']} អស់ស្តុកហើយ សូមទាក់ទង Admin", show_alert=True)
         return
     qty = max(1, min(qty, max_qty))
-    icon = p.get("icon", "📦")
+    icon = resolve_icon(p.get("icon", "📦"))
     sold = p.get("sold", 0)
     bot.edit_message_text(
         f"{icon} <b>{p['name']}</b>\n💵 តម្លៃឯកតា: ${p['price']:.2f}\n📦 ស្តុកនៅសល់: {max_qty}\n📈 លក់រួច: {sold} accounts\n\n"
@@ -1945,7 +1977,7 @@ def admin_product_pick_kb(prefix, empty_stock_only=False):
     products = load_products()
     kb = types.InlineKeyboardMarkup(row_width=1)
     for key, p in products.items():
-        icon = p.get("icon", "📦")
+        icon = resolve_icon(p.get("icon", "📦"))
         left = stock_count(key)
         sold = p.get("sold", 0)
         label = f"{icon} {p['name']} ({left} នៅសល់ / លក់ {sold})"
@@ -2500,7 +2532,7 @@ def callback_router(call):
             return
         p = products[key]
         bot.edit_message_text(
-            f"✏️ <b>{p.get('icon','📦')} {p['name']}</b> (តម្លៃបច្ចុប្បន្ន: ${p['price']:.2f})\n\n"
+            f"✏️ <b>{resolve_icon(p.get('icon','📦'))} {p['name']}</b> (តម្លៃបច្ចុប្បន្ន: ${p['price']:.2f})\n\n"
             f"ជ្រើសរើសអ្វីដែលចង់កែ:",
             chat_id, call.message.message_id,
             reply_markup=admin_edit_field_kb(key),
@@ -2544,7 +2576,7 @@ def callback_router(call):
             return
         p = products[key]
         bot.edit_message_text(
-            f"⚠️ តើអ្នកប្រាកដថាចង់លុប <b>{p.get('icon','📦')} {p['name']}</b> (key: <code>{key}</code>)?\n"
+            f"⚠️ តើអ្នកប្រាកដថាចង់លុប <b>{resolve_icon(p.get('icon','📦'))} {p['name']}</b> (key: <code>{key}</code>)?\n"
             f"ស្តុកនៅសល់ {stock_count(key)} account នឹងត្រូវលុបចោលផងដែរ។",
             chat_id, call.message.message_id,
             reply_markup=admin_delete_confirm_kb(key),
@@ -3017,7 +3049,7 @@ def broadcast_new_stock(key, added_count):
     p = products.get(key)
     if not p or added_count <= 0:
         return 0, 0
-    icon = p.get("icon", "📦")
+    icon = resolve_icon(p.get("icon", "📦"))
     text = (
         f"➕ <b>ស្តុកថ្មីត្រូវបានបន្ថែមសម្រាប់ {p['name']}!</b>\n\n"
         f"📦 ថ្មីបន្ថែម: <b>{added_count} items</b>\n"
@@ -3044,7 +3076,7 @@ def broadcast_price_change(key, old_price, new_price):
     p = products.get(key)
     if not p or new_price == old_price:
         return 0, 0
-    icon = p.get("icon", "📦")
+    icon = resolve_icon(p.get("icon", "📦"))
     if new_price < old_price:
         pct = round((old_price - new_price) / old_price * 100) if old_price else 0
         header = f"📉 <b>បញ្ចុះតម្លៃ! {p['name']} ថោកជាងមុន{f' {pct}%' if pct else ''}!</b>"
@@ -3082,7 +3114,7 @@ def broadcast_low_stock(key, left):
     p = products.get(key)
     if not p:
         return 0, 0
-    icon = p.get("icon", "📦")
+    icon = resolve_icon(p.get("icon", "📦"))
     text = (
         f"🚨 <b>ស្តុកជិតអស់ហើយ — {p['name']}!</b>\n\n"
         f"📦 សល់តែ <b>{left} accounts</b> ប៉ុណ្ណោះ\n"
@@ -3162,7 +3194,7 @@ def all_emoji_categories():
     cats = list(EMOJI_CATEGORIES)
     seen = {g for g, _ in cats}
     for key, p in load_products().items():
-        icon = p.get("icon", "📦")
+        icon = resolve_icon(p.get("icon", "📦"))
         if icon and icon not in seen:
             cats.append((icon, f"{icon} Icon ផលិតផល: {p.get('name', key)}"))
             seen.add(icon)
