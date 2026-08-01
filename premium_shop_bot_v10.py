@@ -31,6 +31,7 @@ import json
 import time
 import signal
 import hashlib
+import hmac
 import threading
 import subprocess
 import requests
@@ -499,14 +500,19 @@ def save_pending_deposits(d):
     _save(PENDING_DEPOSITS_FILE, d)
 
 
-def create_pending_deposit(dep_id, uid, amount, ref_disp):
+def create_pending_deposit(dep_id, uid, amount, ref_disp, mode="manual", reference=None):
+    """mode="manual" (default, ដដែលនឹងលំហូរ QR ផ្ទាល់ខ្លួន + admin approve ដោយដៃ) ឬ
+    mode="auto" (ប្រើពី Mini App API — Bakong KHQR auto-detect តាម `reference`)"""
     with _lock:
         deps = load_pending_deposits()
         deps[dep_id] = {
             "uid": uid,
             "amount": amount,
             "ref": ref_disp,
+            "mode": mode,
+            "reference": reference,  # CamRapidPay reference (មានតែ mode="auto")
             "status": "pending",  # pending | approved | rejected
+            "credited": False,
             "receipt_file_id": None,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -3430,15 +3436,257 @@ def cmd_broadcast(message):
 
 
 # ------------------------------------------------------------------
-# KEEP-ALIVE (Flask, សម្រាប់ deploy លើ Render)
+# MINI APP REST API (សម្រាប់ Kairozen Store Telegram Mini App)
+# ------------------------------------------------------------------
+# Mini App (WebApp) ហៅ endpoint ទាំងនេះដើម្បីទាញ/ធ្វើប្រតិបត្តិការ product/wallet/deposit
+# ដោយផ្ទាល់ ជំនួសអ្នកប្រើចុច button ក្នុង chat ។ Telegram.WebApp.initData ត្រូវផ្ញើមកជាមួយ
+# រាល់ request (header X-Telegram-Init-Data ឬ query/body key "init_data") ហើយត្រូវ verify
+# hash ជានិច្ចមុននឹងទុកចិត្តលើ uid ណាមួយ — បើគ្មាន verify ទេ user ណាម្នាក់អាចផ្ញើ uid
+# របស់អ្នកដទៃមកក្លែងធ្វើប្រតិបត្តិការជំនួសគេបាន។
+_API_QR_CACHE = {}  # dep_id -> PNG bytes (in-memory ប៉ុណ្ណោះ — QR ផុតកំណត់លឿនស្រាប់ មិនចាំបាច់ persist)
+_API_QR_CACHE_LOCK = threading.Lock()
+
+
+def _verify_webapp_init_data(init_data, max_age_sec=86400):
+    """Verify Telegram WebApp initData signature
+    (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app)
+    Return dict user info (id, first_name, username...) បើត្រឹមត្រូវ, ឬ None បើមិនត្រឹមត្រូវ/ចាស់ពេក។"""
+    from urllib.parse import parse_qsl
+    if not init_data:
+        return None
+    try:
+        parsed = dict(parse_qsl(init_data, strict_parsing=True))
+    except Exception:
+        return None
+    received_hash = parsed.pop("hash", None)
+    if not received_hash:
+        return None
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(computed_hash, received_hash):
+        return None
+    try:
+        auth_date = int(parsed.get("auth_date", "0"))
+        if max_age_sec and time.time() - auth_date > max_age_sec:
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return json.loads(parsed.get("user", "{}"))
+    except Exception:
+        return {}
+
+
+def api_product_list():
+    products = load_products()
+    out = []
+    for key, p in products.items():
+        out.append({
+            "key": key,
+            "name": p.get("name", key),
+            "price": p.get("price", 0.0),
+            "icon": p.get("icon", "📦"),
+            "stock": stock_count(key),
+            "sold": p.get("sold", 0),
+        })
+    return out
+
+
+def api_perform_purchase(uid, product_key, qty=1):
+    """ដូច handle_buy_wallet ​(callback ក្នុង chat) ប៉ុន្តែសម្រាប់ហៅពី Mini App API —
+    return dict លទ្ធផលជំនួសការ answer_callback_query។ Bot នៅតែផ្ញើ receipt ចូល chat
+    ធម្មតា ដើម្បីឲ្យ user មាន history រួមទាំង Mini App និង chat ។"""
+    products = load_products()
+    if product_key not in products:
+        return {"ok": False, "error": "product_not_found"}
+    product = products[product_key]
+    qty = max(1, int(qty))
+    unit_price = product["price"]
+    total_price = round(unit_price * qty, 2)
+
+    if stock_count(product_key) < qty:
+        return {"ok": False, "error": "out_of_stock", "available": stock_count(product_key)}
+
+    user = get_user(uid)
+    if user["balance"] < total_price:
+        return {"ok": False, "error": "insufficient_balance", "balance": user["balance"], "required": total_price}
+
+    items = pop_stock_items(product_key, qty)
+    if len(items) < qty:
+        push_stock_items(product_key, items)  # ដាក់ត្រឡប់វិញ បើយកមិនគ្រប់ (race condition)
+        return {"ok": False, "error": "out_of_stock_race"}
+
+    new_balance = update_balance(uid, -total_price)
+    orders = load_orders()
+    orders.append({
+        "uid": uid,
+        "product": product["name"],
+        "price": total_price,
+        "qty": qty,
+        "time": time.strftime("%Y-%m-%d %H:%M"),
+    })
+    save_orders(orders)
+
+    products[product_key]["sold"] = products[product_key].get("sold", 0) + qty
+    save_products(products)
+
+    users = load_users()
+    users[str(uid)]["orders"] = users[str(uid)].get("orders", 0) + qty
+    save_users(users)
+
+    accounts_text = "\n".join(f"{i+1}. <code>{html.escape(it)}</code>" for i, it in enumerate(items))
+    try:
+        bot.send_message(
+            uid,
+            f"✅ ការទិញជោគជ័យ (តាម Mini App)!\n\n"
+            f"🛍️ Product: <b>{product['name']}</b> × {qty}\n"
+            f"💵 សរុប: ${total_price:.2f}\n\n"
+            f"🔑 <b>Account របស់អ្នក:</b>\n{accounts_text}",
+        )
+    except Exception:
+        pass
+    if ADMIN_ID:
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"🔔 លក់ថ្មី (Mini App): {product['name']} × {qty} (${total_price:.2f}) ដល់ user {uid}\n"
+                f"ស្តុកនៅសល់: {stock_count(product_key)}",
+            )
+        except Exception:
+            pass
+    notify_public(
+        f"🛍️ <b>ការកម្មង់ថ្មី!</b>\n{product.get('icon', '📦')} {product['name']} × {qty}\n💵 ${total_price:.2f}"
+    )
+    left_after = stock_count(product_key)
+    if 0 < left_after <= LOW_STOCK_THRESHOLD:
+        products2 = load_products()
+        if product_key in products2 and not products2[product_key].get("low_stock_alerted"):
+            products2[product_key]["low_stock_alerted"] = True
+            save_products(products2)
+            try:
+                broadcast_low_stock(product_key, left_after)
+            except Exception as e:
+                print(f"[broadcast_low_stock] failed: {e}", flush=True)
+
+    return {"ok": True, "items": items, "total": total_price, "balance": new_balance}
+
+
+def api_create_deposit(uid, amount):
+    """បង្កើត deposit (auto Bakong KHQR ឬ manual QR ដូចហាងគ្មាន Bakong ID ខ្លួនឯង) សម្រាប់
+    Mini App → return dict {ok, dep_id, mode, qr_url, ...} ។ Mini App frontend ត្រូវបង្ហាញ
+    qr_url ជា <img> រួច poll /api/deposit/status ។"""
+    amount = round(float(amount), 2)
+    ref = f"KZAPI{uid}{int(time.time())}"[:50]
+    dep_id = f"DEP-{hashlib.md5(ref.encode()).hexdigest()[:10].upper()}"
+
+    if has_auto_bakong():
+        data = camrapid_create(amount, ref)
+        if not data:
+            return {"ok": False, "error": "gateway_error", "detail": _last_camrapid_error}
+        qr_string = data.get("qr_code", "")
+        payment_url = data.get("payment_url", "")
+        img_buf = build_qr_image(
+            qr_string, amount=amount, ref=dep_id, label="Wallet Top-Up",
+            subtitle=f"{STORE_NAME} · Bakong KHQR",
+        ) if qr_string else None
+        if img_buf:
+            with _API_QR_CACHE_LOCK:
+                _API_QR_CACHE[dep_id] = img_buf.getvalue()
+        create_pending_deposit(dep_id, uid, amount, dep_id, mode="auto", reference=ref)
+        return {
+            "ok": True, "dep_id": dep_id, "mode": "auto", "amount": amount,
+            "qr_url": f"/api/qr/{dep_id}.png", "payment_url": payment_url,
+        }
+
+    qr_file_id, qr_note = get_manual_qr()
+    if not qr_file_id:
+        return {"ok": False, "error": "no_manual_qr_configured"}
+    try:
+        file_info = bot.get_file(qr_file_id)
+        img_bytes = bot.download_file(file_info.file_path)
+        with _API_QR_CACHE_LOCK:
+            _API_QR_CACHE[dep_id] = img_bytes
+    except Exception as e:
+        return {"ok": False, "error": "qr_fetch_failed", "detail": str(e)}
+    create_pending_deposit(dep_id, uid, amount, dep_id, mode="manual", reference=None)
+    return {
+        "ok": True, "dep_id": dep_id, "mode": "manual", "amount": amount,
+        "qr_url": f"/api/qr/{dep_id}.png", "note": qr_note,
+    }
+
+
+def api_check_deposit(dep_id):
+    """ត្រួតពិនិត្យស្ថានភាព deposit មួយ — បើ mode="auto" ហើយនៅ pending, ធ្វើ camrapid_check
+    ផ្ទាល់ ហើយបញ្ចូលលុយស្វ័យប្រវត្តិបើបានទូទាត់ (idempotent តាម flag credited)។
+    mode="manual" ត្រូវរង់ចាំ admin ចុច ✅/❌ ក្នុង chat ដូចមុន (status field ដដែល)។"""
+    rec = get_pending_deposit(dep_id)
+    if not rec:
+        return {"ok": False, "error": "not_found"}
+    status = rec.get("status")
+    if rec.get("mode") == "auto" and status == "pending" and not rec.get("credited"):
+        if camrapid_check(rec.get("reference")):
+            update_balance(rec["uid"], rec["amount"])
+            update_pending_deposit(dep_id, status="approved", credited=True)
+            notify_public(f"💰 <b>Deposit ជោគជ័យ!</b>\n👤 User {rec['uid']}\n💵 ${rec['amount']:.2f}")
+            ref_uid, bonus = credit_referral_commission(rec["uid"], rec["amount"])
+            if ref_uid:
+                try:
+                    bot.send_message(
+                        int(ref_uid),
+                        f"🎉 <b>Referral Commission!</b>\n"
+                        f"💵 អ្នកទទួលបាន <b>${bonus:.2f}</b> ({REFERRAL_PERCENT:.0f}%) ចូល wallet ស្វ័យប្រវត្តិ!",
+                    )
+                except Exception:
+                    pass
+            rec = get_pending_deposit(dep_id)
+            status = rec.get("status")
+    return {
+        "ok": True,
+        "status": status,
+        "amount": rec.get("amount"),
+        "mode": rec.get("mode"),
+        "credited": bool(rec.get("credited")),
+        "balance": get_user(rec["uid"])["balance"] if status == "approved" else None,
+    }
+
+
+# ------------------------------------------------------------------
+# KEEP-ALIVE (Flask, សម្រាប់ deploy លើ Render) + MINI APP API ROUTES
 # ------------------------------------------------------------------
 def start_keep_alive():
-    from flask import Flask, request as flask_request
+    from flask import Flask, request as flask_request, jsonify, send_file
     app = Flask(__name__)
+
+    @app.after_request
+    def _cors(resp):
+        # Mini App page ជួនកាល host នៅ domain ដាច់ដោយឡែក (ឧ. static hosting) មុននឹងហៅមក
+        # backend នេះ ដូច្នេះបើក CORS សម្រាប់ /api/ ទាំងអស់ — init_data verification នៅតែ
+        # ការពារគ្រប់ request ស្រាប់ ទោះ CORS បើកក៏ដោយ។
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Telegram-Init-Data"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        return resp
 
     @app.route("/")
     def home():
         return f"{STORE_NAME} Bot is running ✅"
+
+    @app.route("/app")
+    def miniapp_route():
+        # Mini App frontend (miniapp/miniapp.html) ត្រូវដាក់ជាមួយ script នេះក្នុង folder
+        # ដដែល (ដូច GitHub repo structure) ដើម្បីឲ្យ Render deploy ជាមួយគ្នា។ URL នេះ
+        # (https://<your-app>.onrender.com/app) គឺជា URL ត្រូវយកទៅដាក់ក្នុង @BotFather
+        # /newapp ឬ /mybots -> Bot Settings -> Menu Button / Mini App ។
+        miniapp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miniapp", "miniapp.html")
+        try:
+            with open(miniapp_path, "r", encoding="utf-8") as f:
+                return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
+        except FileNotFoundError:
+            return (
+                "miniapp/miniapp.html រកមិនឃើញទេ — សូមប្រាកដថាបានដាក់ file នេះនៅជាមួយ "
+                "premium_shop_bot_v10.py ក្នុង path miniapp/miniapp.html", 404,
+            )
 
     @app.route("/camrapid-webhook", methods=["POST", "GET"])
     def camrapid_webhook():
@@ -3449,6 +3697,106 @@ def start_keep_alive():
         except Exception:
             pass
         return {"success": True}, 200
+
+    def _get_init_data():
+        return (
+            flask_request.headers.get("X-Telegram-Init-Data")
+            or flask_request.args.get("init_data")
+            or (flask_request.get_json(silent=True) or {}).get("init_data")
+            or ""
+        )
+
+    def _require_uid():
+        """Return (uid, None) បើ init_data ត្រឹមត្រូវ, ឬ (None, (response, status)) បើមិនត្រឹមត្រូវ។
+        ត្រូវហៅមុននឹងធ្វើអ្វីៗ ក្នុងគ្រប់ route ដែលអានទិន្នន័យផ្ទាល់ខ្លួន ឬធ្វើប្រតិបត្តិការ។"""
+        tg_user = _verify_webapp_init_data(_get_init_data())
+        if not tg_user or not tg_user.get("id"):
+            return None, (jsonify({"ok": False, "error": "invalid_init_data"}), 401)
+        return tg_user["id"], None
+
+    @app.route("/api/products", methods=["GET"])
+    def api_products_route():
+        return jsonify({"ok": True, "products": api_product_list()})
+
+    @app.route("/api/me", methods=["GET", "POST", "OPTIONS"])
+    def api_me_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_uid()
+        if err:
+            return err
+        u = get_user(uid)
+        return jsonify({
+            "ok": True,
+            "uid": uid,
+            "balance": u.get("balance", 0.0),
+            "orders": u.get("orders", 0),
+            "ref_earned": u.get("ref_earned", 0.0),
+            "ref_count": u.get("ref_count", 0),
+            "referral_link": referral_link_for(uid),
+        })
+
+    @app.route("/api/orders", methods=["GET"])
+    def api_orders_route():
+        uid, err = _require_uid()
+        if err:
+            return err
+        orders = [o for o in load_orders() if str(o.get("uid")) == str(uid)]
+        return jsonify({"ok": True, "orders": orders[-50:][::-1]})
+
+    @app.route("/api/order", methods=["POST", "OPTIONS"])
+    def api_order_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_uid()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        product_key = body.get("product_key")
+        try:
+            qty = int(body.get("qty", 1))
+        except (TypeError, ValueError):
+            qty = 1
+        if not product_key:
+            return jsonify({"ok": False, "error": "missing_product_key"}), 400
+        result = api_perform_purchase(uid, product_key, qty)
+        return jsonify(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/deposit", methods=["POST", "OPTIONS"])
+    def api_deposit_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_uid()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        try:
+            amount = float(body.get("amount"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_amount"}), 400
+        if amount <= 0:
+            return jsonify({"ok": False, "error": "invalid_amount"}), 400
+        result = api_create_deposit(uid, amount)
+        return jsonify(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/deposit/status", methods=["GET"])
+    def api_deposit_status_route():
+        uid, err = _require_uid()
+        if err:
+            return err
+        dep_id = flask_request.args.get("dep_id", "")
+        rec = get_pending_deposit(dep_id)
+        if not rec or str(rec.get("uid")) != str(uid):
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        return jsonify(api_check_deposit(dep_id))
+
+    @app.route("/api/qr/<dep_id>.png", methods=["GET"])
+    def api_qr_route(dep_id):
+        with _API_QR_CACHE_LOCK:
+            data = _API_QR_CACHE.get(dep_id)
+        if not data:
+            return "not found", 404
+        return send_file(io.BytesIO(data), mimetype="image/png")
 
     threading.Thread(
         target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080))),
