@@ -77,12 +77,20 @@
   }
   .brand .mark .dot{width:7px; height:7px; border-radius:50%; background:var(--gold); box-shadow:0 0 8px var(--gold);}
   .brand .sub{font-size:11.5px; color:var(--ink-dim); letter-spacing:.3px;}
+  .top-actions{display:flex; align-items:center; gap:10px;}
   .wallet-chip{
     display:flex; align-items:center; gap:7px;
     background:var(--violet-soft); border:1px solid rgba(124,92,255,.4);
     padding:8px 13px; border-radius:999px; cursor:pointer; color:var(--gold);
   }
   .wallet-chip .amt{font-family:'Sora'; font-weight:600; font-size:14.5px; color:var(--ink);}
+  .avatar-btn{
+    width:38px; height:38px; border-radius:50%; flex-shrink:0; cursor:pointer;
+    background:linear-gradient(135deg, var(--violet), #4C3AB8); color:#fff;
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Sora'; font-weight:700; font-size:14px; border:1px solid rgba(255,255,255,.12);
+    background-size:cover; background-position:center;
+  }
 
   main{flex:1; overflow-y:auto; padding-bottom:calc(84px + var(--safe-b));}
   .view{display:none; padding:16px 16px 8px;}
@@ -200,6 +208,19 @@
   .status-line.ok{color:var(--success);}
   .status-line.fail{color:#E5545C;}
 
+  .owner-strip{
+    display:flex; align-items:center; gap:12px; background:var(--bg-1); border:1px solid var(--line);
+    border-radius:16px; padding:12px 14px; margin-bottom:4px;
+  }
+  .owner-strip .u-avatar{
+    width:38px; height:38px; border-radius:50%; flex-shrink:0; overflow:hidden;
+    background:linear-gradient(135deg, var(--violet), #4C3AB8); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-family:'Sora'; font-weight:700; font-size:13px;
+    background-size:cover; background-position:center;
+  }
+  .owner-strip .o-owner-name{font-weight:600; font-size:13.5px;}
+  .owner-strip .o-owner-sub{font-size:11px; color:var(--ink-dim); margin-top:2px;}
+
   /* ---------- orders ---------- */
   .order-row{display:flex; gap:12px; padding:14px 4px; border-bottom:1px solid var(--line); align-items:center;}
   .order-row:last-child{border-bottom:none;}
@@ -255,6 +276,85 @@
   }
   .search-box input::placeholder{color:var(--ink-dim);}
 
+  .seg-tabs{display:flex; gap:8px; margin:14px 0 4px;}
+  .seg-tabs .seg{
+    flex:1; display:flex; align-items:center; justify-content:center; gap:6px;
+    background:var(--bg-1); border:1px solid var(--line); border-radius:12px; padding:9px;
+    color:var(--ink-dim); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;
+  }
+  .seg-tabs .seg .ic svg{width:15px; height:15px;}
+  .seg-tabs .seg.active{color:var(--gold); border-color:rgba(245,197,66,.4); background:rgba(245,197,66,.08);}
+
+  .user-row{display:flex; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line); align-items:center;}
+  .user-row:last-child{border-bottom:none;}
+  .user-row .u-avatar{
+    width:38px; height:38px; border-radius:50%; flex-shrink:0; background:linear-gradient(135deg, var(--violet), #4C3AB8);
+    color:#fff; display:flex; align-items:center; justify-content:center; font-family:'Sora'; font-weight:700; font-size:13px;
+  }
+  .user-row .u-name{font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:6px;}
+  .user-row .u-admin-badge{
+    font-size:9px; font-weight:700; color:var(--gold); background:rgba(245,197,66,.14); padding:2px 6px; border-radius:999px;
+  }
+  .user-row .u-meta{font-size:11px; color:var(--ink-dim); margin-top:3px;}
+  .user-row .u-stats{margin-left:auto; text-align:right;}
+  .user-row .u-bal{font-family:'Sora'; font-weight:700; color:var(--gold); font-size:13.5px;}
+  .user-row .u-orders{font-size:10.5px; color:var(--ink-dim); margin-top:2px;}
+
+  /* ---------- profile ---------- */
+  .profile-hero{
+    background:linear-gradient(150deg, var(--bg-1), var(--bg-2) 140%);
+    border:1px solid var(--line); border-radius:22px; padding:26px 20px 20px; text-align:center;
+  }
+  .p-avatar{
+    width:72px; height:72px; border-radius:50%; margin:0 auto 12px; overflow:hidden;
+    background:linear-gradient(135deg, var(--violet), #4C3AB8); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-family:'Sora'; font-weight:700; font-size:26px;
+    background-size:cover; background-position:center; border:2px solid rgba(245,197,66,.5);
+  }
+  .p-name{font-family:'Sora'; font-weight:700; font-size:18px;}
+  .p-username{font-size:12.5px; color:var(--ink-dim); margin-top:2px;}
+  .p-idrow{
+    display:inline-flex; align-items:center; gap:8px; margin-top:12px; background:var(--bg-2);
+    border:1px solid var(--line); border-radius:999px; padding:6px 6px 6px 14px; font-size:11.5px; color:var(--ink-dim);
+  }
+  .p-joined{font-size:11px; color:var(--ink-dim); margin-top:10px;}
+  .mini-copy{
+    width:24px; height:24px; border-radius:50%; border:none; background:var(--violet-soft); color:var(--gold);
+    display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0;
+  }
+  .mini-copy .ic svg{width:12px; height:12px;}
+
+  .stat-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:18px;}
+  .stat-box{
+    background:var(--bg-1); border:1px solid var(--line); border-radius:16px; padding:14px; text-align:center;
+  }
+  .stat-box .s-ic{color:var(--gold); margin-bottom:6px; display:flex; justify-content:center;}
+  .stat-box .s-ic .ic svg{width:18px; height:18px;}
+  .stat-box .s-val{font-family:'Sora'; font-weight:700; font-size:16px;}
+  .stat-box .s-lbl{font-size:11px; color:var(--ink-dim); margin-top:3px;}
+
+  .ref-card{
+    background:linear-gradient(150deg, var(--bg-1), var(--bg-2) 140%);
+    border:1px solid var(--line); border-radius:18px; padding:16px;
+  }
+  .ref-desc{font-size:12.5px; color:var(--ink-dim); line-height:1.5;}
+  .ref-link-row{
+    display:flex; align-items:center; gap:8px; background:var(--bg-2); border:1px solid var(--line);
+    border-radius:12px; padding:10px 10px 10px 14px; margin-top:12px;
+  }
+  .ref-link{flex:1; font-size:12px; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+
+  .list-card{
+    background:var(--bg-1); border:1px solid var(--line); border-radius:16px; overflow:hidden;
+  }
+  .list-row{
+    display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line);
+    cursor:pointer; font-size:13.5px;
+  }
+  .list-row:last-child{border-bottom:none;}
+  .list-row .chev{margin-left:auto; color:var(--ink-dim);}
+  .app-foot{text-align:center; font-size:11px; color:var(--ink-dim); margin:20px 0 6px;}
+
   /* ---------- admin ---------- */
   .admin-row{
     display:flex; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line); align-items:center;
@@ -276,6 +376,8 @@
   }
   .field{margin-top:12px; text-align:left;}
   .field label{font-size:12px; color:var(--ink-dim); display:block; margin-bottom:6px;}
+  .field .chk-label{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink); margin-bottom:0;}
+  .field .chk-label input[type=checkbox]{width:16px; height:16px; accent-color:var(--violet); flex-shrink:0;}
   .field input, .field textarea{
     width:100%; background:var(--bg-2); border:1px solid var(--line); border-radius:12px; color:var(--ink);
     padding:11px 12px; font-family:inherit; font-size:14px; resize:vertical;
@@ -304,9 +406,12 @@
       <div class="mark"><span class="dot"></span>Kairozen Store</div>
       <div class="sub">គណនី Premium ត្រឹមត្រូវ ១០០%</div>
     </div>
-    <div class="wallet-chip" onclick="goto('wallet')">
-      <span class="ic ic-18" data-icon="wallet"></span>
-      <span class="amt num" id="chipBalance">$0.00</span>
+    <div class="top-actions">
+      <div class="wallet-chip" onclick="goto('wallet')">
+        <span class="ic ic-18" data-icon="wallet"></span>
+        <span class="amt num" id="chipBalance">$0.00</span>
+      </div>
+      <div class="avatar-btn" id="topAvatarBtn" onclick="goto('profile')">?</div>
     </div>
   </header>
 
@@ -346,16 +451,102 @@
     </section>
 
     <section class="view" id="view-orders">
+      <div class="owner-strip" id="ordersOwnerStrip">
+        <div class="u-avatar" id="ordersOwnerAv">?</div>
+        <div>
+          <div class="o-owner-name" id="ordersOwnerName">—</div>
+          <div class="o-owner-sub">ការកម្ម៉ង់ខាងក្រោមទាំងអស់ ជាកម្មសិទ្ធិគណនីរបស់អ្នក</div>
+        </div>
+      </div>
       <div class="section-title">ប្រវត្តិការកម្ម៉ង់</div>
       <div id="ordersList"></div>
     </section>
 
+    <section class="view" id="view-profile">
+      <div class="profile-hero">
+        <div class="p-avatar" id="pfAvatar">?</div>
+        <div class="p-name" id="pfName">—</div>
+        <div class="p-username" id="pfUsername"></div>
+        <div class="p-idrow" id="pfUidRow">
+          <span class="mono" id="pfUid">ID: —</span>
+          <button class="mini-copy" onclick="copyText(String(ME.uid||''), 'បានចម្លង User ID')">${ic('copy')}</button>
+        </div>
+        <div class="p-joined" id="pfJoined"></div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="s-ic">${ic('wallet')}</div>
+          <div class="s-val num" id="pfBalance">$0.00</div>
+          <div class="s-lbl">សមតុល្យ</div>
+        </div>
+        <div class="stat-box">
+          <div class="s-ic">${ic('receipt')}</div>
+          <div class="s-val num" id="pfOrders">0</div>
+          <div class="s-lbl">ការកម្ម៉ង់</div>
+        </div>
+        <div class="stat-box">
+          <div class="s-ic">${ic('users')}</div>
+          <div class="s-val num" id="pfRefCount">0</div>
+          <div class="s-lbl">អ្នកណែនាំបាន</div>
+        </div>
+        <div class="stat-box">
+          <div class="s-ic">${ic('hand-coins')}</div>
+          <div class="s-val num" id="pfRefEarned">$0.00</div>
+          <div class="s-lbl">ចំណូលណែនាំ</div>
+        </div>
+      </div>
+
+      <div class="section-title">តំណណែនាំមិត្តភក្តិ</div>
+      <div class="ref-card">
+        <div class="ref-desc">ចែករំលែកតំណនេះ ទទួលកម្រៃ ៥% រាល់ពេលមិត្តភក្តិបញ្ចូលលុយ</div>
+        <div class="ref-link-row">
+          <span class="ref-link mono" id="pfRefLink">—</span>
+          <button class="mini-copy" onclick="copyText(ME.referral_link||'', 'បានចម្លងតំណណែនាំ')">${ic('copy')}</button>
+        </div>
+        <button class="primary-btn" style="margin-top:10px;" onclick="shareReferral()">${ic('share-2')} ចែករំលែកទៅមិត្តភក្តិ</button>
+      </div>
+
+      <div class="section-title">ផ្សេងៗ</div>
+      <div class="list-card">
+        <div class="list-row" onclick="goto('orders')">
+          <span class="ic ic-20" data-icon="receipt-text"></span>
+          <span>ប្រវត្តិការកម្ម៉ង់</span>
+          <span class="ic ic-18 chev" data-icon="chevron-right"></span>
+        </div>
+        <div class="list-row" onclick="contactSupport()">
+          <span class="ic ic-20" data-icon="life-buoy"></span>
+          <span>ទាក់ទង Support</span>
+          <span class="ic ic-18 chev" data-icon="chevron-right"></span>
+        </div>
+        <div class="list-row" onclick="copyText(ME.referral_link||'', 'បានចម្លងតំណណែនាំ')">
+          <span class="ic ic-20" data-icon="gift"></span>
+          <span>ណែនាំមិត្តភក្តិ</span>
+          <span class="ic ic-18 chev" data-icon="chevron-right"></span>
+        </div>
+      </div>
+      <div class="app-foot">Kairozen Store · v1.0</div>
+    </section>
+
     <section class="view" id="view-admin">
       <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
-        <span>គ្រប់គ្រង Product</span>
+        <span>ផ្ទាំងគ្រប់គ្រង</span>
         <button class="icon-btn accent" onclick="openBroadcastForm()" title="ផ្ញើសារទៅគ្រប់គ្នា" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="megaphone"></span></button>
       </div>
-      <div id="adminProductList"></div>
+      <div class="seg-tabs" id="adminSegTabs">
+        <button class="seg active" data-seg="products" onclick="switchAdminSeg('products')">${ic('package')} Product</button>
+        <button class="seg" data-seg="users" onclick="switchAdminSeg('users')">${ic('users')} User</button>
+      </div>
+      <div id="adminProductPane">
+        <div id="adminProductList"></div>
+      </div>
+      <div id="adminUserPane" style="display:none;">
+        <div class="search-box" style="margin-top:2px;">
+          <span class="ic ic-18" data-icon="search"></span>
+          <input type="text" id="adminUserSearch" placeholder="ស្វែងរកតាមឈ្មោះ / username / ID...">
+        </div>
+        <div id="adminUserList"></div>
+      </div>
     </section>
   </main>
 
@@ -363,6 +554,7 @@
     <button data-view="shop" class="active" onclick="goto('shop')"><span class="ic ic-20" data-icon="shopping-cart"></span>ទំនិញ</button>
     <button data-view="wallet" onclick="goto('wallet')"><span class="ic ic-20" data-icon="wallet"></span>Wallet</button>
     <button data-view="orders" onclick="goto('orders')"><span class="ic ic-20" data-icon="receipt"></span>កម្ម៉ង់</button>
+    <button data-view="profile" onclick="goto('profile')"><span class="ic ic-20" data-icon="user"></span>ប្រវត្តិរូប</button>
     <button data-view="admin" id="adminTabBtn" onclick="goto('admin')" style="display:none;"><span class="ic ic-20" data-icon="shield"></span>Admin</button>
   </nav>
 </div>
@@ -444,9 +636,10 @@ function goto(view){
   document.getElementById('view-'+view).classList.add('active');
   document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('active', b.dataset.view===view));
   if (view === 'wallet') loadMe();
-  if (view === 'orders') loadOrders();
-  if (view === 'admin') loadAdminProducts();
-  document.getElementById('adminFab').style.display = (view === 'admin' && IS_ADMIN) ? 'flex' : 'none';
+  if (view === 'orders') { loadMe(); loadOrders(); }
+  if (view === 'admin') { if (currentAdminSeg === 'users') loadAdminUsers(); else loadAdminProducts(); }
+  if (view === 'profile') loadMe().then(renderProfile);
+  document.getElementById('adminFab').style.display = (view === 'admin' && IS_ADMIN && currentAdminSeg === 'products') ? 'flex' : 'none';
 }
 
 /* ---------------- products ---------------- */
@@ -553,11 +746,16 @@ async function confirmBuy(){
   }
 }
 
-/* ---------------- wallet ---------------- */
+/* ---------------- wallet & profile ---------------- */
 let IS_ADMIN = false;
+let ME = {};
+function initials(name){
+  return (name||'').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase() || 'K';
+}
 async function loadMe(){
   const res = await api('/api/me');
-  if (!res.ok) return;
+  if (!res.ok) return res;
+  ME = res;
   document.getElementById('chipBalance').textContent = money(res.balance);
   document.getElementById('walletBalance').textContent = money(res.balance);
   document.getElementById('walletRef').textContent = `ការកម្ម៉ង់សរុប៖ ${res.orders} · ណែនាំបានប្រាក់៖ ${money(res.ref_earned)}`;
@@ -565,6 +763,67 @@ async function loadMe(){
     IS_ADMIN = true;
     document.getElementById('adminTabBtn').style.display = '';
   }
+  const topAv = document.getElementById('topAvatarBtn');
+  if (res.photo_url){
+    topAv.style.backgroundImage = `url('${res.photo_url}')`;
+    topAv.textContent = '';
+  } else {
+    topAv.style.backgroundImage = '';
+    topAv.textContent = initials(res.name);
+  }
+  const ownAv = document.getElementById('ordersOwnerAv');
+  if (ownAv){
+    if (res.photo_url){ ownAv.style.backgroundImage = `url('${res.photo_url}')`; ownAv.textContent = ''; }
+    else { ownAv.style.backgroundImage = ''; ownAv.textContent = initials(res.name); }
+    document.getElementById('ordersOwnerName').textContent = (res.name || 'Kairozen User') + (res.username ? ' · @'+res.username : '');
+  }
+  return res;
+}
+function renderProfile(){
+  if (!ME || !ME.ok) return;
+  const av = document.getElementById('pfAvatar');
+  if (ME.photo_url){
+    av.style.backgroundImage = `url('${ME.photo_url}')`;
+    av.textContent = '';
+  } else {
+    av.style.backgroundImage = '';
+    av.textContent = initials(ME.name);
+  }
+  document.getElementById('pfName').textContent = ME.name || 'Kairozen User';
+  document.getElementById('pfUsername').textContent = ME.username ? '@' + ME.username : '';
+  document.getElementById('pfUid').textContent = 'ID: ' + ME.uid;
+  document.getElementById('pfJoined').textContent = ME.joined_at ? ('ចូលរួមតាំងពី ' + ME.joined_at) : '';
+  document.getElementById('pfBalance').textContent = money(ME.balance);
+  document.getElementById('pfOrders').textContent = ME.orders || 0;
+  document.getElementById('pfRefCount').textContent = ME.ref_count || 0;
+  document.getElementById('pfRefEarned').textContent = money(ME.ref_earned);
+  document.getElementById('pfRefLink').textContent = ME.referral_link || 'មិនទាន់មានតំណ';
+  renderIcons();
+}
+async function copyText(text, msg){
+  if (!text){ toast('គ្មានទិន្នន័យសម្រាប់ចម្លង', 'circle-alert'); return; }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(msg || 'បានចម្លង', 'check-circle');
+    haptic('light');
+  } catch(e){
+    toast('មិនអាចចម្លងបានទេ', 'circle-alert');
+  }
+}
+function shareReferral(){
+  const link = ME.referral_link;
+  if (!link){ toast('តំណណែនាំមិនទាន់មានទេ', 'circle-alert'); return; }
+  const text = 'ចូលរួម Kairozen Store ជាមួយខ្ញុំ ទិញ Premium Account តម្លៃសមរម្យ!';
+  const shareUrl = 'https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' + encodeURIComponent(text);
+  if (tg && tg.openTelegramLink) tg.openTelegramLink(shareUrl);
+  else window.open(shareUrl, '_blank');
+}
+function contactSupport(){
+  const link = ME.referral_link || '';
+  const m = link.match(/t\.me\/([^?]+)/);
+  const uname = m ? m[1] : null;
+  if (uname && tg && tg.openTelegramLink) tg.openTelegramLink('https://t.me/' + uname);
+  else toast('សូមទាក់ទងតាម Bot ដោយផ្ទាល់', 'life-buoy');
 }
 
 let chosenAmt = 5;
@@ -697,7 +956,78 @@ async function loadAdminProducts(){
   renderIcons();
 }
 
+let currentAdminSeg = 'products';
+function switchAdminSeg(seg){
+  haptic('light');
+  currentAdminSeg = seg;
+  document.querySelectorAll('#adminSegTabs .seg').forEach(b => b.classList.toggle('active', b.dataset.seg === seg));
+  document.getElementById('adminProductPane').style.display = seg === 'products' ? '' : 'none';
+  document.getElementById('adminUserPane').style.display = seg === 'users' ? '' : 'none';
+  document.getElementById('adminFab').style.display = (seg === 'products' && IS_ADMIN) ? 'flex' : 'none';
+  if (seg === 'users') loadAdminUsers();
+  else loadAdminProducts();
+}
+
+let ADMIN_USERS = [];
+function userInitials(name){
+  return (name||'').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase() || 'K';
+}
+async function loadAdminUsers(){
+  const host = document.getElementById('adminUserList');
+  host.innerHTML = skeletonRows(4);
+  const res = await api('/api/admin/users');
+  if (!res.ok){
+    host.innerHTML = `<div class="empty">${ic('shield-x')}<div>គ្មានសិទ្ធិចូលមើលទំព័រនេះទេ</div></div>`;
+    renderIcons();
+    return;
+  }
+  ADMIN_USERS = res.users || [];
+  renderAdminUsers();
+}
+function renderAdminUsers(){
+  const q = (document.getElementById('adminUserSearch').value || '').trim().toLowerCase();
+  const list = !q ? ADMIN_USERS : ADMIN_USERS.filter(u =>
+    (u.name||'').toLowerCase().includes(q) ||
+    (u.username||'').toLowerCase().includes(q) ||
+    String(u.uid).includes(q)
+  );
+  const host = document.getElementById('adminUserList');
+  if (!list.length){
+    host.innerHTML = `<div class="empty">${ic('users')}<div>${q ? 'រកមិនឃើញ user ត្រូវនឹងការស្វែងរក' : 'មិនទាន់មាន user ទេ'}</div></div>`;
+    renderIcons();
+    return;
+  }
+  host.innerHTML = `<div class="section-title" style="margin-top:10px;">សរុប ${ADMIN_USERS.length} user${list.length!==ADMIN_USERS.length ? ' · បង្ហាញ '+list.length : ''}</div>` +
+    list.map(u => `
+    <div class="user-row">
+      <div class="u-avatar">${userInitials(u.name)}</div>
+      <div>
+        <div class="u-name">${escapeHtml(u.name)}${u.is_admin ? `<span class="u-admin-badge">ADMIN</span>` : ''}</div>
+        <div class="u-meta">${u.username ? '@'+escapeHtml(u.username) : 'ID '+u.uid}${u.last_seen ? ' · ចូលចុងក្រោយ '+u.last_seen.slice(0,10) : ''}</div>
+      </div>
+      <div class="u-stats">
+        <div class="u-bal num">${money(u.balance)}</div>
+        <div class="u-orders">កម្ម៉ង់ ${u.orders} · ណែនាំ ${u.ref_count}</div>
+      </div>
+    </div>
+  `).join('');
+  renderIcons();
+}
+document.getElementById('adminUserSearch').addEventListener('input', renderAdminUsers);
+
 let pfImageData = null;
+/* ---------------- broadcast job polling (stock/price/message notifications) ---------------- */
+function pollBroadcastJob(jobId, onDone, tries){
+  tries = tries || 0;
+  if (!jobId || tries > 40) return; // ~80s max wait
+  setTimeout(async () => {
+    const res = await api('/api/admin/broadcast/status?job_id=' + encodeURIComponent(jobId));
+    if (!res.ok){ return; }
+    if (res.status === 'done'){ onDone(res); return; }
+    pollBroadcastJob(jobId, onDone, tries + 1);
+  }, 2000);
+}
+
 function openProductForm(key){
   const p = key ? PRODUCTS.find(x => x.key === key) : null;
   const iconVal = p ? productIconName(p.icon) : 'sparkles';
@@ -723,6 +1053,9 @@ function openProductForm(key){
     <div class="field"><label>Icon (ប្រើពេលគ្មានរូបភាព)</label>
       <div class="icon-pick" id="pfIconPick"></div>
     </div>
+    ${p ? `<div class="field notify-field">
+      <label class="chk-label"><input type="checkbox" id="pfNotify" checked> ជូនដំណឹង user ទាំងអស់ បើតម្លៃផ្លាស់ប្តូរ (📉/📈)</label>
+    </div>` : ''}
     <button class="primary-btn" onclick="saveProduct('${key||''}')">${ic('check')} រក្សាទុក</button>
   `;
   const pick = document.getElementById('pfIconPick');
@@ -752,14 +1085,23 @@ async function saveProduct(existingKey){
   const price = document.getElementById('pfPrice').value;
   const activeIcon = document.querySelector('#pfIconPick .opt.active');
   const icon = activeIcon ? activeIcon.dataset.iconOpt : 'sparkles';
+  const notifyEl = document.getElementById('pfNotify');
+  const notify = notifyEl ? notifyEl.checked : true;
   if (!key || !name || !price){ toast('សូមបំពេញគ្រប់ field', 'circle-alert'); return; }
-  const res = await api('/api/admin/product', {method:'POST', body: JSON.stringify({key, name, price, icon})});
+  const res = await api('/api/admin/product', {method:'POST', body: JSON.stringify({key, name, price, icon, notify})});
   if (!res.ok){ toast('មិនអាចរក្សាទុកបានទេ', 'circle-alert'); haptic('error'); return; }
   if (pfImageData){
     const imgRes = await api('/api/admin/product-image', {method:'POST', body: JSON.stringify({product_key: key, image_data: pfImageData})});
     if (!imgRes.ok) toast('រក្សាទុក product បាន ប៉ុន្តែ upload រូបភាពមិនជោគជ័យ', 'circle-alert');
   }
-  toast('រក្សាទុករួចរាល់', 'check-circle');
+  if (res.price_broadcast_job){
+    toast('រក្សាទុករួចរាល់ · កំពុងជូនដំណឹងតម្លៃថ្មីទៅ user', 'check-circle');
+    pollBroadcastJob(res.price_broadcast_job, (job) => {
+      toast(`ជូនដំណឹងតម្លៃថ្មីរួច · ជោគជ័យ ${job.sent} នាក់ (${job.failed} បរាជ័យ)`, 'megaphone');
+    });
+  } else {
+    toast('រក្សាទុករួចរាល់', 'check-circle');
+  }
   haptic('success');
   closeSheet();
   loadAdminProducts();
@@ -794,6 +1136,11 @@ async function addStock(key){
     closeSheet();
     loadAdminProducts();
     loadProducts();
+    if (res.broadcast_job){
+      pollBroadcastJob(res.broadcast_job, (job) => {
+        toast(`ជូនដំណឹងស្តុកថ្មីរួច · ជោគជ័យ ${job.sent} នាក់ (${job.failed} បរាជ័យ)`, 'megaphone');
+      });
+    }
   } else {
     toast('មិនអាចបន្ថែម stock បានទេ', 'circle-alert');
   }
@@ -811,10 +1158,20 @@ async function clearStock(key){
   }
 }
 
+let bcMediaType = 'text';
+let bcMediaData = null;
 function openBroadcastForm(){
+  bcMediaType = 'text';
+  bcMediaData = null;
   document.getElementById('sheetBody').innerHTML = `
     <div class="s-name">${ic('megaphone')} ផ្ញើសារទៅ User ទាំងអស់</div>
-    <div class="field"><label>អត្ថបទសារ</label>
+    <div class="seg-tabs" id="bcTypeTabs" style="margin-top:14px;">
+      <button class="seg active" data-t="text" onclick="setBcType('text')">${ic('type')} អត្ថបទ</button>
+      <button class="seg" data-t="image" onclick="setBcType('image')">${ic('image')} រូបភាព</button>
+      <button class="seg" data-t="video" onclick="setBcType('video')">${ic('video')} Video</button>
+    </div>
+    <div id="bcMediaSlot"></div>
+    <div class="field"><label id="bcTextLabel">អត្ថបទសារ</label>
       <textarea id="bcText" rows="5" placeholder="វាយសារដែលចង់ផ្ញើទៅ user ទាំងអស់ក្នុង bot..."></textarea>
     </div>
     <button class="primary-btn" onclick="sendBroadcast()">${ic('send')} ផ្ញើឥឡូវនេះ</button>
@@ -822,17 +1179,72 @@ function openBroadcastForm(){
   renderIcons();
   document.getElementById('sheetOverlay').classList.add('show');
 }
+function setBcType(t){
+  bcMediaType = t;
+  bcMediaData = null;
+  document.querySelectorAll('#bcTypeTabs .seg').forEach(b => b.classList.toggle('active', b.dataset.t === t));
+  document.getElementById('bcTextLabel').textContent = t === 'text' ? 'អត្ថបទសារ' : 'អត្ថបទ Caption (ស្រេចចិត្ត)';
+  const slot = document.getElementById('bcMediaSlot');
+  if (t === 'text'){ slot.innerHTML = ''; return; }
+  const accept = t === 'image' ? 'image/png,image/jpeg,image/webp' : 'video/mp4,video/webm,video/quicktime';
+  const limitLabel = t === 'image' ? '8MB' : '20MB';
+  slot.innerHTML = `
+    <div class="field">
+      <label>${t === 'image' ? 'ជ្រើសរូបភាព' : 'ជ្រើស Video'} (កំណត់ ${limitLabel})</label>
+      <div class="img-upload">
+        <img class="preview" id="bcMediaPreviewImg" style="display:none;">
+        <video class="preview" id="bcMediaPreviewVid" style="display:none;" muted></video>
+        <label for="bcMediaFile">${ic('upload')} ជ្រើសឯកសារ</label>
+        <input type="file" id="bcMediaFile" accept="${accept}" onchange="onPickBcMedia(event)">
+      </div>
+    </div>
+  `;
+  renderIcons();
+}
+function onPickBcMedia(e){
+  const file = e.target.files[0];
+  if (!file) return;
+  const limit = bcMediaType === 'image' ? 8*1024*1024 : 20*1024*1024;
+  if (file.size > limit){ toast('ឯកសារធំពេក', 'circle-alert'); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    bcMediaData = reader.result;
+    if (bcMediaType === 'image'){
+      const prev = document.getElementById('bcMediaPreviewImg');
+      prev.src = bcMediaData; prev.style.display = '';
+      document.getElementById('bcMediaPreviewVid').style.display = 'none';
+    } else {
+      const prev = document.getElementById('bcMediaPreviewVid');
+      prev.src = bcMediaData; prev.style.display = ''; prev.controls = true;
+      document.getElementById('bcMediaPreviewImg').style.display = 'none';
+    }
+  };
+  reader.readAsDataURL(file);
+}
 async function sendBroadcast(){
   const text = document.getElementById('bcText').value.trim();
-  if (!text){ toast('សូមវាយសារជាមុនសិន', 'circle-alert'); return; }
+  if (bcMediaType === 'text' && !text){ toast('សូមវាយសារជាមុនសិន', 'circle-alert'); return; }
+  if (bcMediaType !== 'text' && !bcMediaData){ toast('សូមជ្រើសរូបភាព/video ជាមុនសិន', 'circle-alert'); return; }
   if (!confirm('ផ្ញើសារនេះទៅ user ទាំងអស់ក្នុង bot?')) return;
-  const res = await api('/api/admin/broadcast', {method:'POST', body: JSON.stringify({text})});
+  const body = {text};
+  if (bcMediaType === 'image') body.image_data = bcMediaData;
+  if (bcMediaType === 'video') body.video_data = bcMediaData;
+  const res = await api('/api/admin/broadcast', {method:'POST', body: JSON.stringify(body)});
   if (res.ok){
-    toast(`កំពុងផ្ញើទៅ user ${res.total} នាក់`, 'check-circle');
+    toast(`កំពុងផ្ញើទៅ user ${res.total} នាក់...`, 'loader');
     haptic('success');
     closeSheet();
+    if (res.job_id){
+      pollBroadcastJob(res.job_id, (job) => {
+        toast(`ផ្ញើសារជោគជ័យ ${job.sent} នាក់ (${job.failed} បរាជ័យ) ក្នុងចំណោម ${job.total}`, 'check-circle-2');
+      });
+    }
   } else {
-    toast('មិនអាចផ្ញើសារបានទេ', 'circle-alert');
+    const errMap = {
+      empty_text: 'សូមវាយសារ ឬជ្រើសរូបភាព/video', invalid_image: 'រូបភាពមិនត្រឹមត្រូវ', image_too_large: 'រូបភាពធំពេក (កំណត់ 8MB)',
+      invalid_video: 'Video មិនត្រឹមត្រូវ', video_too_large: 'Video ធំពេក (កំណត់ 20MB)',
+    };
+    toast(errMap[res.error] || 'មិនអាចផ្ញើសារបានទេ', 'circle-alert');
     haptic('error');
   }
 }
@@ -841,6 +1253,8 @@ async function sendBroadcast(){
 renderIcons(); // static header/tabbar icons
 loadProducts();
 loadMe();
+// dev/preview fallback: Telegram often makes initials show as '?' outside the app;
+// this just leaves the avatar showing '?' gracefully until /api/me responds.
 </script>
 </body>
 </html>
