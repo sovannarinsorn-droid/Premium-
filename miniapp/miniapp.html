@@ -7,7 +7,7 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;500;600;700&family=Sora:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg-0:#0B0F1F;
@@ -28,11 +28,11 @@
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0; padding:0; height:100%; background:var(--bg-0); overscroll-behavior:none;}
   body{
-    font-family:'Kantumruy Pro','Space Grotesk',sans-serif;
+    font-family:'Noto Sans Khmer','Sora',sans-serif;
     color:var(--ink);
     display:flex; flex-direction:column;
   }
-  .num{font-family:'Space Grotesk','Kantumruy Pro',sans-serif;}
+  .num{font-family:'Sora','Noto Sans Khmer',sans-serif;}
   .mono{font-family:'JetBrains Mono',monospace;}
 
   /* icon system (Lucide SVGs) — replaces emoji everywhere for a consistent, crisp look */
@@ -72,7 +72,7 @@
   }
   .brand{display:flex; flex-direction:column; gap:2px;}
   .brand .mark{
-    font-family:'Space Grotesk'; font-weight:700; font-size:19px; letter-spacing:.2px;
+    font-family:'Sora'; font-weight:700; font-size:19px; letter-spacing:.2px;
     display:flex; align-items:center; gap:7px;
   }
   .brand .mark .dot{width:7px; height:7px; border-radius:50%; background:var(--gold); box-shadow:0 0 8px var(--gold);}
@@ -82,7 +82,7 @@
     background:var(--violet-soft); border:1px solid rgba(124,92,255,.4);
     padding:8px 13px; border-radius:999px; cursor:pointer; color:var(--gold);
   }
-  .wallet-chip .amt{font-family:'Space Grotesk'; font-weight:600; font-size:14.5px; color:var(--ink);}
+  .wallet-chip .amt{font-family:'Sora'; font-weight:600; font-size:14.5px; color:var(--ink);}
 
   main{flex:1; overflow-y:auto; padding-bottom:calc(84px + var(--safe-b));}
   .view{display:none; padding:16px 16px 8px;}
@@ -103,7 +103,7 @@
   }
   .card .name{font-size:14px; font-weight:600; line-height:1.35; min-height:38px;}
   .card .meta{display:flex; align-items:center; justify-content:space-between; margin-top:2px;}
-  .card .price{font-family:'Space Grotesk'; font-weight:700; font-size:16.5px; color:var(--gold);}
+  .card .price{font-family:'Sora'; font-weight:700; font-size:16.5px; color:var(--gold);}
   .stock-pill{
     display:inline-flex; align-items:center; gap:4px;
     font-size:10.5px; padding:3px 8px 3px 6px; border-radius:999px; font-weight:600; width:fit-content;
@@ -116,6 +116,34 @@
     display:flex; align-items:center; justify-content:center; gap:6px;
   }
   .buy-btn:disabled{background:var(--bg-2); color:var(--ink-dim);}
+  .buy-btn:active:not(:disabled), .primary-btn:active, .icon-btn:active, .qty-row button:active{transform:scale(.94); transition:transform .08s ease;}
+  .card:active{transform:scale(.985); transition:transform .1s ease;}
+
+  .badge-hot{
+    position:absolute; top:10px; right:10px; display:flex; align-items:center; gap:3px;
+    background:linear-gradient(135deg,#FF6B4A,#F5C542); color:#1B0F00; font-size:9.5px; font-weight:700;
+    padding:3px 7px; border-radius:999px; letter-spacing:.2px; box-shadow:0 2px 8px rgba(245,197,66,.35);
+  }
+  .badge-hot .ic{width:10px;height:10px;}
+  .badge-hot .ic svg{width:10px;height:10px;}
+
+  /* ---------- skeleton loading ---------- */
+  @keyframes shimmer{0%{background-position:-200px 0} 100%{background-position:200px 0}}
+  .skel{
+    background:linear-gradient(90deg, var(--bg-1) 25%, var(--bg-2) 37%, var(--bg-1) 63%);
+    background-size:400px 100%; animation:shimmer 1.4s ease infinite; border-radius:8px;
+  }
+  .skel-card{
+    background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius); padding:14px;
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .skel-card .skel-tile{width:46px; height:46px; border-radius:13px;}
+  .skel-card .skel-line{height:12px; width:80%;}
+  .skel-card .skel-line.short{width:50%;}
+  .skel-row{display:flex; gap:12px; padding:14px 4px; align-items:center;}
+  .skel-row .skel-tile{width:38px; height:38px; border-radius:11px; flex-shrink:0;}
+  .skel-row .skel-lines{flex:1; display:flex; flex-direction:column; gap:6px;}
+  .skel-row .skel-line{height:11px;}
 
   /* ---------- wallet ---------- */
   .balance-hero{
@@ -128,20 +156,20 @@
     top:-90px; right:-70px;
   }
   .balance-hero .label{font-size:12px; color:var(--ink-dim); letter-spacing:1px; text-transform:uppercase;}
-  .balance-hero .value{font-family:'Space Grotesk'; font-weight:700; font-size:38px; margin:6px 0 2px;}
+  .balance-hero .value{font-family:'Sora'; font-weight:700; font-size:38px; margin:6px 0 2px;}
   .balance-hero .ref{font-size:11.5px; color:var(--ink-dim);}
 
   .chip-row{display:flex; gap:8px; flex-wrap:wrap; margin-top:14px;}
   .amt-chip{
     flex:1; min-width:64px; text-align:center; padding:10px 6px; border-radius:12px;
-    background:var(--bg-1); border:1px solid var(--line); font-family:'Space Grotesk'; font-weight:600;
+    background:var(--bg-1); border:1px solid var(--line); font-family:'Sora'; font-weight:600;
     cursor:pointer; font-size:13.5px;
   }
   .amt-chip.active{border-color:var(--gold); color:var(--gold); background:rgba(245,197,66,.08);}
   .custom-amt{display:flex; gap:8px; margin-top:10px;}
   .custom-amt input{
     flex:1; background:var(--bg-1); border:1px solid var(--line); border-radius:12px; color:var(--ink);
-    padding:11px 12px; font-family:'Space Grotesk'; font-size:14px;
+    padding:11px 12px; font-family:'Sora'; font-size:14px;
   }
   .primary-btn{
     width:100%; border:none; border-radius:14px; padding:13px; font-weight:700; font-size:14.5px;
@@ -157,8 +185,8 @@
   .ticket .notch{position:absolute; width:20px; height:20px; background:var(--bg-0); border-radius:50%; top:50%; margin-top:-10px;}
   .ticket .notch.l{left:-10px;} .ticket .notch.r{right:-10px;}
   .ticket .perf{border-top:2px dashed #d8d8e0; margin:14px 0;}
-  .ticket .store{font-family:'Space Grotesk'; font-weight:700; font-size:13.5px; letter-spacing:.3px;}
-  .ticket .amt{font-family:'Space Grotesk'; font-weight:700; font-size:26px; margin:10px 0 4px; color:#1B2247;}
+  .ticket .store{font-family:'Sora'; font-weight:700; font-size:13.5px; letter-spacing:.3px;}
+  .ticket .amt{font-family:'Sora'; font-weight:700; font-size:26px; margin:10px 0 4px; color:#1B2247;}
   .ticket img{width:100%; max-width:220px; border-radius:8px; margin:8px auto;}
   .ticket .refid{font-size:11px; color:#7a7d92; letter-spacing:.5px;}
   .ticket .status-line{
@@ -177,7 +205,7 @@
   .order-row:last-child{border-bottom:none;}
   .order-row .o-name{font-weight:600; font-size:14px;}
   .order-row .o-meta{font-size:12px; color:var(--ink-dim); margin-top:3px;}
-  .order-row .o-price{font-family:'Space Grotesk'; font-weight:700; color:var(--gold); margin-left:auto; font-size:14.5px;}
+  .order-row .o-price{font-family:'Sora'; font-weight:700; color:var(--gold); margin-left:auto; font-size:14.5px;}
 
   .empty{text-align:center; padding:50px 20px; color:var(--ink-dim);}
   .empty .ic{margin:0 auto 12px; color:var(--ink-dim); opacity:.6;}
@@ -204,13 +232,13 @@
   }
   @keyframes sheetup{from{transform:translateY(30px); opacity:0} to{transform:none; opacity:1}}
   .sheet .s-name{font-weight:600; font-size:16px; margin-top:10px;}
-  .sheet .s-price{color:var(--gold); font-family:'Space Grotesk'; font-weight:700; margin-top:2px;}
+  .sheet .s-price{color:var(--gold); font-family:'Sora'; font-weight:700; margin-top:2px;}
   .qty-row{display:flex; align-items:center; justify-content:center; gap:18px; margin:18px 0;}
   .qty-row button{
     width:38px; height:38px; border-radius:50%; border:1px solid var(--line); background:var(--bg-2);
     color:var(--ink); cursor:pointer; display:flex; align-items:center; justify-content:center;
   }
-  .qty-row .q-val{font-family:'Space Grotesk'; font-weight:700; font-size:20px; min-width:28px; text-align:center;}
+  .qty-row .q-val{font-family:'Sora'; font-weight:700; font-size:20px; min-width:28px; text-align:center;}
   .accounts-box{
     background:var(--bg-2); border-radius:12px; padding:12px; margin-top:12px; font-size:12.5px;
     max-height:160px; overflow-y:auto; text-align:left;
@@ -377,6 +405,14 @@ function renderIcons(){
   if (window.lucide) lucide.createIcons();
 }
 
+function haptic(type){
+  if (!tg || !tg.HapticFeedback) return;
+  try {
+    if (type === 'success' || type === 'error' || type === 'warning') tg.HapticFeedback.notificationOccurred(type);
+    else tg.HapticFeedback.impactOccurred(type || 'light');
+  } catch(e){}
+}
+
 function toast(msg, iconName){
   const t = document.getElementById('toast');
   t.innerHTML = (iconName ? ic(iconName) : '') + `<span>${msg}</span>`;
@@ -400,6 +436,7 @@ function escapeHtml(s){ const d = document.createElement('div'); d.textContent =
 
 /* ---------------- navigation ---------------- */
 function goto(view){
+  haptic('light');
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+view).classList.add('active');
   document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('active', b.dataset.view===view));
@@ -411,9 +448,22 @@ function goto(view){
 
 /* ---------------- products ---------------- */
 let PRODUCTS = [];
+let productsLoaded = false;
+function skeletonGrid(n){
+  return Array(n).fill(0).map(()=>`
+    <div class="skel-card">
+      <div class="skel skel-tile"></div>
+      <div class="skel skel-line"></div>
+      <div class="skel skel-line short"></div>
+    </div>
+  `).join('');
+}
 async function loadProducts(){
+  const grid = document.getElementById('productGrid');
+  if (!productsLoaded) grid.innerHTML = skeletonGrid(4);
   const data = await api('/api/products');
   PRODUCTS = data.products || [];
+  productsLoaded = true;
   renderProductGrid();
 }
 function renderProductGrid(){
@@ -425,15 +475,19 @@ function renderProductGrid(){
     renderIcons();
     return;
   }
+  // top seller badge — highlight products that are genuinely popular, not just "first product with sold>0"
+  const maxSold = Math.max(0, ...list.map(p => p.sold || 0));
   grid.innerHTML = list.map(p => {
     const low = p.stock > 0 && p.stock <= 3;
     const out = p.stock <= 0;
+    const isHot = maxSold >= 5 && (p.sold || 0) === maxSold;
     return `<div class="card">
+      ${isHot ? `<span class="badge-hot">${ic('flame')} លក់ដាច់</span>` : ''}
       ${p.image ? `<img class="card-img" src="${p.image}" alt="">` : `<div class="icon-tile">${ic(productIconName(p.icon))}</div>`}
       <div class="name">${escapeHtml(p.name)}</div>
       <span class="stock-pill ${low||out?'low':''}">${ic(out?'ban':'boxes')}${out ? 'អស់ស្តុក' : 'នៅសល់ ' + p.stock}</span>
       <div class="meta"><span class="price num">${money(p.price)}</span></div>
-      <button class="buy-btn" ${out?'disabled':''} onclick="openBuySheet('${p.key}')">
+      <button class="buy-btn" ${out?'disabled':''} onclick="haptic('light'); openBuySheet('${p.key}')">
         ${ic(out ? 'ban' : 'shopping-cart')} ${out?'អស់ស្តុក':'ទិញ'}
       </button>
     </div>`;
@@ -469,7 +523,8 @@ function renderBuySheet(){
 }
 function stepQty(d){
   const next = buyQty + d;
-  if (next < 1 || next > buyProduct.stock) return;
+  if (next < 1 || next > buyProduct.stock){ haptic('light'); return; }
+  haptic('light');
   buyQty = next;
   renderBuySheet();
 }
@@ -490,6 +545,7 @@ async function confirmBuy(){
       out_of_stock_race: 'ស្តុកអស់ភ្លាមៗ សូមព្យាយាមម្តងទៀត', product_not_found: 'រកមិនឃើញផលិតផលនេះទេ',
     };
     toast(errMap[res.error] || 'មានបញ្ហា សូមព្យាយាមម្តងទៀត', 'circle-alert');
+    haptic('error');
     if (res.error === 'insufficient_balance'){ closeSheet(); goto('wallet'); }
   }
 }
@@ -572,7 +628,16 @@ async function pollDeposit(depId){
 }
 
 /* ---------------- orders ---------------- */
+function skeletonRows(n){
+  return Array(n).fill(0).map(()=>`
+    <div class="skel-row">
+      <div class="skel skel-tile"></div>
+      <div class="skel-lines"><div class="skel skel-line"></div><div class="skel skel-line short"></div></div>
+    </div>
+  `).join('');
+}
 async function loadOrders(){
+  document.getElementById('ordersList').innerHTML = skeletonRows(3);
   const res = await api('/api/orders');
   const host = document.getElementById('ordersList');
   const orders = res.orders || [];
@@ -598,6 +663,7 @@ document.getElementById('searchInput').addEventListener('input', renderProductGr
 
 /* ---------------- admin: product & stock management ---------------- */
 async function loadAdminProducts(){
+  document.getElementById('adminProductList').innerHTML = skeletonRows(3);
   const res = await api('/api/admin/products');
   const host = document.getElementById('adminProductList');
   if (!res.ok){
@@ -685,12 +751,13 @@ async function saveProduct(existingKey){
   const icon = activeIcon ? activeIcon.dataset.iconOpt : 'sparkles';
   if (!key || !name || !price){ toast('សូមបំពេញគ្រប់ field', 'circle-alert'); return; }
   const res = await api('/api/admin/product', {method:'POST', body: JSON.stringify({key, name, price, icon})});
-  if (!res.ok){ toast('មិនអាចរក្សាទុកបានទេ', 'circle-alert'); return; }
+  if (!res.ok){ toast('មិនអាចរក្សាទុកបានទេ', 'circle-alert'); haptic('error'); return; }
   if (pfImageData){
     const imgRes = await api('/api/admin/product-image', {method:'POST', body: JSON.stringify({product_key: key, image_data: pfImageData})});
     if (!imgRes.ok) toast('រក្សាទុក product បាន ប៉ុន្តែ upload រូបភាពមិនជោគជ័យ', 'circle-alert');
   }
   toast('រក្សាទុករួចរាល់', 'check-circle');
+  haptic('success');
   closeSheet();
   loadAdminProducts();
   loadProducts();
