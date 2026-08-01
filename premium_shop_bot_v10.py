@@ -228,38 +228,6 @@ EMOJI_CATEGORIES = [
 
 
 
-# ------------------------------------------------------------------
-# Mini App (miniapp.html) ប្រើ Lucide icon *ឈ្មោះ* (ឧ. "clapperboard",
-# "headphones", "palette", "sparkles") រក្សាទុកក្នុង products[key]["icon"]
-# ជំនួសឲ្យ emoji glyph ធម្មតា — ចំណុចនេះដំណើរការត្រឹមត្រូវក្នុង Mini App
-# (ព្រោះវា render SVG តាមឈ្មោះ) ប៉ុន្តែ bot Telegram នៅតែសង្ឃឹមថា icon ជា
-# glyph ពិត។ បើមិនបំប្លែង Telegram នឹងបង្ហាញអក្សរ "clapperboard" ត្រង់ៗ
-# ជំនួសអោយ 🎬 ហើយ premium emoji ក៏មិនអាចផ្គូផ្គងបានដែរ (ព្រោះ emoji map
-# គឺ key ដោយ glyph ពិត មិនមែន text ទេ)។ LUCIDE_TO_EMOJI ដោះស្រាយចំណុចនេះ
-# — ត្រូវប្រើតែពេលបង្ហាញក្នុង Telegram (មិនប៉ះពាល់ទិន្នន័យដែល Mini App ប្រើ)។
-LUCIDE_TO_EMOJI = {
-    "bot": "🤖", "clapperboard": "🎬", "headphones": "🎧", "book-open": "📘",
-    "palette": "🎨", "key-round": "🔑", "shopping-bag": "🛍",
-    "package": "📦", "credit-card": "💳", "gamepad-2": "🎮", "smartphone": "📱",
-    "music-2": "🎵", "tv": "📺", "cloud": "☁️", "image": "🖼", "file-text": "📄",
-    "star": "⭐", "gem": "💎",
-    "camera": "📷", "mail": "✉️", "globe": "🌐", "sparkles": "✨",
-    "shield": "🛡", "zap": "⚡", "crown": "👑",
-}
-# ចំណាំ: បញ្ជីនេះត្រូវតែគ្របដណ្តប់ ICON_CHOICES ទាំងអស់ក្នុង miniapp.html (25 icon)
-# បើ Mini App បន្ថែម icon ថ្មីទៀត ត្រូវបន្ថែម mapping ត្រង់នេះផងដែរ មិនដូច្នេះទេ
-# icon ថ្មីនោះនឹងបង្ហាញជា text ឈ្មោះត្រង់ៗក្នុង Telegram វិញ (ដូចករណី clapperboard ពីមុន)
-
-
-def resolve_icon(icon):
-    """បម្លែង Lucide icon name (មកពី Mini App) ទៅជា emoji glyph សម្រាប់បង្ហាញ
-    ក្នុង Telegram។ បើ icon ជា glyph ស្រាប់ (មិនមែន Lucide name ដែលស្គាល់) នឹង
-    return ដដែលដោយមិនប៉ះពាល់អ្វី។"""
-    if not icon:
-        return "📦"
-    return LUCIDE_TO_EMOJI.get(icon, icon)
-
-
 def get_emoji_map():
     return _load(EMOJI_FILE, {})
 
@@ -270,43 +238,17 @@ def save_emoji_map(m):
 
 def premium_text(text):
     """ជំនួស glyph ធម្មតា (ឧ. ✅) ដោយ HTML <tg-emoji> tag បើមាន custom_emoji_id
-    កំណត់ទុករួច។ ត្រូវការសារផ្ញើជា parse_mode HTML (ជា default របស់ bot នេះរួចហើយ)។
-
-    ចំណាំសំខាន់: ត្រូវ scan text ដើម​តែ pass តែមួយ (regex) មិនមែនធ្វើ text.replace()
-    ជាប់គ្នាច្រើនដងលើ text ដែលកែប្រែរួចនោះទេ — ព្រោះបើ glyph ខ្លីជា substring របស់
-    glyph វែង (ឧ. "✏" ស្ថិតក្នុង "✏️" ដែលមាន variation-selector) ការធ្វើ replace
-    ជាបន្តបន្ទាប់នឹងទៅ match glyph ខ្លីនោះ *ក្នុង* tag <tg-emoji> ដែល glyph វែង
-    ទើប wrap រួច ធ្វើឲ្យកើត nested/broken tag ដែល Telegram បដិសេធ ជាមួយ error
-    "Empty attribute name in the tag tg-emoji"។"""
+    កំណត់ទុករួច។ ត្រូវការសារផ្ញើជា parse_mode HTML (ជា default របស់ bot នេះរួចហើយ)។"""
     if not text:
         return text
     m = get_emoji_map()
     if not m:
         return text
-    # យក glyph វែងបំផុតជាមុន ដូច emoji_icon_for() ដើម្បីកុំឲ្យ glyph ខ្លីត្រូវនឹង
-    # substring របស់ glyph វែង
-    items = sorted(
-        ((g, info) for g, info in m.items() if g),
-        key=lambda gi: len(gi[0]),
-        reverse=True,
-    )
-    items = [(g, info) for g, info in items if info.get("custom_emoji_id")]
-    if not items:
-        return text
-    # សំខាន់: content ក្នុង <tg-emoji> ត្រូវតែជា placeholder character ពិត
-    # (info["emoji"]) ដែលបានចាប់ពី sticker premium ដើម — មិនមែន glyph ធម្មតា
-    # (g) ដែលប្រើតែសម្រាប់ស្វែងរកក្នុង text ប៉ុណ្ណោះ។ បើប្រើ glyph ធម្មតាដាក់ក្នុង
-    # tag ខណៈ custom_emoji_id ភ្ជាប់មកជាមួយ placeholder ផ្សេង Telegram នឹងច្រានចោល
-    # ជាមួយ error "ENTITY_TEXT_INVALID"។
-    icon_map = {g: (info["custom_emoji_id"], info.get("emoji") or g) for g, info in items}
-    pattern = re.compile("|".join(re.escape(g) for g, _ in items))
-
-    def _sub(match):
-        g = match.group(0)
-        icon_id, placeholder = icon_map[g]
-        return f'<tg-emoji emoji-id="{icon_id}">{placeholder}</tg-emoji>'
-
-    return pattern.sub(_sub, text)
+    for glyph, info in m.items():
+        icon_id = info.get("custom_emoji_id")
+        if icon_id and glyph in text:
+            text = text.replace(glyph, f'<tg-emoji emoji-id="{icon_id}">{glyph}</tg-emoji>')
+    return text
 
 
 def emoji_icon_for(text):
@@ -1302,7 +1244,7 @@ def products_kb():
     kb = types.InlineKeyboardMarkup(row_width=1)
     for key, p in products.items():
         left = stock_count(key)
-        icon = resolve_icon(p.get("icon", "📦"))
+        icon = p.get("icon", "📦")
         if left > 0:
             label = f"{icon} {p['name'].upper()} - ${p['price']:.2f}"
             btn = pbtn(label, callback_data=f"buyopt_{key}", style="success")
@@ -1341,7 +1283,7 @@ def show_qty_picker(call, product_key, qty):
         bot.answer_callback_query(call.id, f"❌ {p['name']} អស់ស្តុកហើយ សូមទាក់ទង Admin", show_alert=True)
         return
     qty = max(1, min(qty, max_qty))
-    icon = resolve_icon(p.get("icon", "📦"))
+    icon = p.get("icon", "📦")
     sold = p.get("sold", 0)
     bot.edit_message_text(
         f"{icon} <b>{p['name']}</b>\n💵 តម្លៃឯកតា: ${p['price']:.2f}\n📦 ស្តុកនៅសល់: {max_qty}\n📈 លក់រួច: {sold} accounts\n\n"
@@ -2003,7 +1945,7 @@ def admin_product_pick_kb(prefix, empty_stock_only=False):
     products = load_products()
     kb = types.InlineKeyboardMarkup(row_width=1)
     for key, p in products.items():
-        icon = resolve_icon(p.get("icon", "📦"))
+        icon = p.get("icon", "📦")
         left = stock_count(key)
         sold = p.get("sold", 0)
         label = f"{icon} {p['name']} ({left} នៅសល់ / លក់ {sold})"
@@ -2558,7 +2500,7 @@ def callback_router(call):
             return
         p = products[key]
         bot.edit_message_text(
-            f"✏️ <b>{resolve_icon(p.get('icon','📦'))} {p['name']}</b> (តម្លៃបច្ចុប្បន្ន: ${p['price']:.2f})\n\n"
+            f"✏️ <b>{p.get('icon','📦')} {p['name']}</b> (តម្លៃបច្ចុប្បន្ន: ${p['price']:.2f})\n\n"
             f"ជ្រើសរើសអ្វីដែលចង់កែ:",
             chat_id, call.message.message_id,
             reply_markup=admin_edit_field_kb(key),
@@ -2602,7 +2544,7 @@ def callback_router(call):
             return
         p = products[key]
         bot.edit_message_text(
-            f"⚠️ តើអ្នកប្រាកដថាចង់លុប <b>{resolve_icon(p.get('icon','📦'))} {p['name']}</b> (key: <code>{key}</code>)?\n"
+            f"⚠️ តើអ្នកប្រាកដថាចង់លុប <b>{p.get('icon','📦')} {p['name']}</b> (key: <code>{key}</code>)?\n"
             f"ស្តុកនៅសល់ {stock_count(key)} account នឹងត្រូវលុបចោលផងដែរ។",
             chat_id, call.message.message_id,
             reply_markup=admin_delete_confirm_kb(key),
@@ -3075,7 +3017,7 @@ def broadcast_new_stock(key, added_count):
     p = products.get(key)
     if not p or added_count <= 0:
         return 0, 0
-    icon = resolve_icon(p.get("icon", "📦"))
+    icon = p.get("icon", "📦")
     text = (
         f"➕ <b>ស្តុកថ្មីត្រូវបានបន្ថែមសម្រាប់ {p['name']}!</b>\n\n"
         f"📦 ថ្មីបន្ថែម: <b>{added_count} items</b>\n"
@@ -3102,7 +3044,7 @@ def broadcast_price_change(key, old_price, new_price):
     p = products.get(key)
     if not p or new_price == old_price:
         return 0, 0
-    icon = resolve_icon(p.get("icon", "📦"))
+    icon = p.get("icon", "📦")
     if new_price < old_price:
         pct = round((old_price - new_price) / old_price * 100) if old_price else 0
         header = f"📉 <b>បញ្ចុះតម្លៃ! {p['name']} ថោកជាងមុន{f' {pct}%' if pct else ''}!</b>"
@@ -3140,7 +3082,7 @@ def broadcast_low_stock(key, left):
     p = products.get(key)
     if not p:
         return 0, 0
-    icon = resolve_icon(p.get("icon", "📦"))
+    icon = p.get("icon", "📦")
     text = (
         f"🚨 <b>ស្តុកជិតអស់ហើយ — {p['name']}!</b>\n\n"
         f"📦 សល់តែ <b>{left} accounts</b> ប៉ុណ្ណោះ\n"
@@ -3220,7 +3162,7 @@ def all_emoji_categories():
     cats = list(EMOJI_CATEGORIES)
     seen = {g for g, _ in cats}
     for key, p in load_products().items():
-        icon = resolve_icon(p.get("icon", "📦"))
+        icon = p.get("icon", "📦")
         if icon and icon not in seen:
             cats.append((icon, f"{icon} Icon ផលិតផល: {p.get('name', key)}"))
             seen.add(icon)
@@ -3309,14 +3251,7 @@ def emoji_capture_step(message, glyph, label):
             reply_markup=kb,
         )
         return
-    # សំខាន់: Telegram គិត ce.offset/ce.length ជា UTF-16 code units មិនមែន
-    # Python character index ទេ — emoji ភាគច្រើន (surrogate-pair, code point
-    # > U+FFFF) ត្រូវការ 2 UTF-16 units ប៉ុន្តែជា Python character តែមួយ។ បើ slice
-    # message.text ដោយផ្ទាល់ដូចមុន នឹងចាប់បានអក្សរខុសកន្លែង (offset រអិល) ពេលមាន
-    # emoji/astral character នៅមុន ឬក្នុងសារនោះ ធ្វើឲ្យ emoji_char ក្លាយជា garbage
-    # ដែលបំបែក <tg-emoji> tag ពេលផ្ញើក្រោយមក (error "Empty attribute name")។
-    _utf16 = message.text.encode("utf-16-le")
-    emoji_char = _utf16[ce.offset * 2: (ce.offset + ce.length) * 2].decode("utf-16-le")
+    emoji_char = message.text[ce.offset: ce.offset + ce.length]
     m = get_emoji_map()
     m[glyph] = {"custom_emoji_id": ce.custom_emoji_id, "emoji": emoji_char}
     save_emoji_map(m)
