@@ -32,6 +32,7 @@ import time
 import signal
 import hashlib
 import hmac
+import base64
 import threading
 import subprocess
 import requests
@@ -111,6 +112,17 @@ BOT_RENTAL_PER_DAY_DEFAULT = float(os.environ.get("BOT_RENTAL_PER_DAY", "0.15"))
 IS_SUBSCRIBER_BOT = os.environ.get("IS_SUBSCRIBER_BOT", "") == "1"
 
 os.makedirs(STOCK_DIR, exist_ok=True)
+IMAGES_DIR = os.path.join(DATA_DIR, "images")
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+
+def _find_product_image(key):
+    """រក file រូបភាពដែលមានស្រាប់សម្រាប់ product key មួយ (មិនថា extension អ្វី) → path ឬ None"""
+    for ext in ("jpg", "jpeg", "png", "webp"):
+        p = os.path.join(IMAGES_DIR, f"{key}.{ext}")
+        if os.path.exists(p):
+            return p
+    return None
 
 class _LoggingExceptionHandler(telebot.ExceptionHandler):
     """បើគ្មាន handler នេះ pyTelegramBotAPI នឹងលេប exception ចោលស្ងាត់ៗ ពេល handler
@@ -609,14 +621,69 @@ def deploy_subscriber_bot(uid, rec=None):
         )
     except Exception as e:
         return False, str(e)
+    # --- គណនា expires_at (តែពេលជួលគិតជាថ្ងៃ — rental_days set; បើមាន Bakong ID ខ្លួនឯង
+    # rental_days ជា None ដូច្នេះគ្មានកាលកំណត់ផុតកំណត់ទេ) ---
+    expires_at = None
+    rental_days = rec.get("rental_days")
+    if rental_days:
+        now = time.time()
+        prev_expires = rec.get("expires_at")
+        # បើកំពុងជាវសកម្មនៅឡើយ (ថ្ងៃមិនទាន់ផុតទេ) → បន្ថែមថ្ងៃថ្មីទៅលើ expiry ចាស់ (មិនបាត់ថ្ងៃដែលនៅសល់ទេ)
+        base = prev_expires if (prev_expires and prev_expires > now) else now
+        expires_at = base + (int(rental_days) * 86400)
     set_sub(
         uid,
         status="active",
         activated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         process_pid=proc.pid,
         process_data_dir=data_dir,
+        expires_at=expires_at,
+        expires_at_text=(time.strftime("%Y-%m-%d %H:%M", time.localtime(expires_at)) if expires_at else None),
     )
     return True, proc.pid
+
+
+def check_expired_subscriptions():
+    """ត្រួតពិនិត្យ subscriber ទាំងអស់ដែល status=active — បើ expires_at កន្លងផុតទៅហើយ,
+    បញ្ឈប់ process bot ស្វ័យប្រវត្តិ ហើយប្តូរ status ទៅ 'expired' + ជូនដំណឹង subscriber & admin។
+    មិនត្រូវហៅពី subscriber bot ខ្លួនឯងទេ (គ្រប់គ្រងតែពី bot ម្ចាស់វេទិកា/main bot)។"""
+    now = time.time()
+    subs = load_subs()
+    for uid_s, rec in subs.items():
+        if rec.get("status") != "active":
+            continue
+        expires_at = rec.get("expires_at")
+        if not expires_at or expires_at > now:
+            continue  # គ្មានកាលកំណត់ ឬនៅមិនទាន់ផុត
+        uid = int(uid_s)
+        stop_subscriber_bot(uid)
+        set_sub(uid, status="expired")
+        try:
+            bot.send_message(
+                uid,
+                "⏰ <b>ការជួល Bot របស់អ្នកបានផុតកំណត់ហើយ</b>\n"
+                "Bot របស់អ្នកឥឡូវត្រូវបានបញ្ឈប់ (ទិន្នន័យ/ស្តុកនៅតែរក្សាទុកគ្រប់គ្រាន់)។\n"
+                "ចុច 🤖 ជាវ Bot ផ្ទាល់ខ្លួន ដើម្បីបន្តជួល ហើយ Bot នឹងចាប់ផ្តើមដំណើរការវិញភ្លាមៗ។",
+            )
+        except Exception as e:
+            print(f"[check_expired_subscriptions] failed to notify uid {uid}: {e}", flush=True)
+        try:
+            notify_public(f"⏰ <b>Bot ជួលបានផុតកំណត់</b>\n👤 User {uid} — bot ត្រូវបានបញ្ឈប់ស្វ័យប្រវត្តិ")
+        except Exception:
+            pass
+
+
+def start_expiry_checker(interval_sec=1800):
+    """ចាប់ផ្តើម background thread ត្រួតពិនិត្យ subscription ផុតកំណត់ រាល់ interval_sec (default 30 នាទី)។
+    ដំណើរការតែលើ bot ម្ចាស់វេទិកា (មិនមែន subscriber clone) ព្រោះមានតែ bot នេះទេដែលគ្រប់គ្រង SUBS_FILE ចម្បង។"""
+    def _loop():
+        while True:
+            try:
+                check_expired_subscriptions()
+            except Exception as e:
+                print(f"[start_expiry_checker] error: {e}", flush=True)
+            time.sleep(interval_sec)
+    threading.Thread(target=_loop, daemon=True).start()
 
 
 # ------------------------------------------------------------------
@@ -1298,7 +1365,10 @@ def admin_reply_kb():
     kb.add(preply_btn(ADMIN_BTN_MSGUSER, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_BROADCAST, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_EMOJI, style="primary"))
-    kb.add(preply_btn(ADMIN_BTN_SUBPRICE, style="primary"))
+    # "កែតម្លៃជួល Bot" ជា setting របស់វេទិកាចម្បង (តម្លៃជួល Bot ដល់ subscriber ថ្មី) —
+    # មិនពាក់ព័ន្ធនឹង bot ដែល subscriber ខ្លួនឯងកំពុងជួលប្រើទេ ដូច្នេះលាក់វានៅលើ clone bot
+    if not IS_SUBSCRIBER_BOT:
+        kb.add(preply_btn(ADMIN_BTN_SUBPRICE, style="primary"))
     kb.add(preply_btn(ADMIN_BTN_SETQR, style="primary"))
     return kb
 
@@ -3310,9 +3380,11 @@ def cmd_subs(message):
         for uid, s in active.items():
             running = _pid_alive(s.get("process_pid"))
             status_icon = "🟢 កំពុងរត់" if running else "🔴 process ស្លាប់ (សូម /activatesub redeploy)"
+            exp_txt = s.get("expires_at_text")
+            exp_tag = f" — ⏰ ផុតកំណត់ {exp_txt}" if exp_txt else " — ♾️ គ្មានកំណត់ (Bakong ខ្លួនឯង)"
             lines.append(
                 f"• <code>{uid}</code> — 🏪 {html.escape(s.get('store_name') or '(គ្មានឈ្មោះ)')} "
-                f"— PID {s.get('process_pid')} — {status_icon}"
+                f"— PID {s.get('process_pid')} — {status_icon}{exp_tag}"
             )
     if not lines:
         bot.reply_to(message, "✅ គ្មានសំណើ ឬ Bot active ណាមួយទេ")
@@ -3322,8 +3394,9 @@ def cmd_subs(message):
 
 @bot.message_handler(commands=["setrentalprice"])
 def cmd_setrentalprice(message):
-    """Admin កែតម្លៃជួល Bot ($/ថ្ងៃ) ដោយផ្ទាល់ តាម command"""
-    if not is_admin(message.from_user.id):
+    """Admin កែតម្លៃជួល Bot ($/ថ្ងៃ) ដោយផ្ទាល់ តាម command — ជាការកំណត់របស់វេទិកាចម្បង
+    ប៉ុណ្ណោះ មិនអនុវត្តលើ subscriber clone bot ទេ"""
+    if not is_admin(message.from_user.id) or IS_SUBSCRIBER_BOT:
         return
     try:
         _, price_s = message.text.split(" ", 1)
@@ -3335,7 +3408,7 @@ def cmd_setrentalprice(message):
 
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(ADMIN_BTN_SUBPRICE))
 def reply_admin_subprice(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) or IS_SUBSCRIBER_BOT:
         return
     msg = bot.send_message(
         message.chat.id,
@@ -3487,6 +3560,7 @@ def api_product_list():
             "name": p.get("name", key),
             "price": p.get("price", 0.0),
             "icon": p.get("icon", "📦"),
+            "image": p.get("image") or None,
             "stock": stock_count(key),
             "sold": p.get("sold", 0),
         })
@@ -3688,6 +3762,15 @@ def start_keep_alive():
                 "premium_shop_bot_v10.py ក្នុង path miniapp/miniapp.html", 404,
             )
 
+    @app.route("/img/<path:filename>")
+    def product_image_route(filename):
+        # មិនអនុញ្ញាតឲ្យ path traversal ចេញក្រៅ IMAGES_DIR
+        safe_name = os.path.basename(filename)
+        p = os.path.join(IMAGES_DIR, safe_name)
+        if not os.path.exists(p):
+            return "not found", 404
+        return send_file(p)
+
     @app.route("/camrapid-webhook", methods=["POST", "GET"])
     def camrapid_webhook():
         # CamRapidPay ហៅ endpoint នេះពេលទូទាត់ជោគជ័យ។ bot ប្រើ polling (camrapid_check)
@@ -3714,6 +3797,16 @@ def start_keep_alive():
             return None, (jsonify({"ok": False, "error": "invalid_init_data"}), 401)
         return tg_user["id"], None
 
+    def _require_admin():
+        """ដូច _require_uid() ប៉ុន្តែតម្រូវឲ្យ uid ត្រូវនឹង ADMIN_ID ថែមទៀត។
+        Return (uid, None) បើត្រឹមត្រូវ, ឬ (None, (response, status)) បើមិនត្រឹមត្រូវ/មិនមែន admin។"""
+        uid, err = _require_uid()
+        if err:
+            return None, err
+        if not ADMIN_ID or int(uid) != int(ADMIN_ID):
+            return None, (jsonify({"ok": False, "error": "forbidden"}), 403)
+        return uid, None
+
     @app.route("/api/products", methods=["GET"])
     def api_products_route():
         return jsonify({"ok": True, "products": api_product_list()})
@@ -3734,7 +3827,147 @@ def start_keep_alive():
             "ref_earned": u.get("ref_earned", 0.0),
             "ref_count": u.get("ref_count", 0),
             "referral_link": referral_link_for(uid),
+            "is_admin": bool(ADMIN_ID and int(uid) == int(ADMIN_ID)),
         })
+
+    # ---------------- ADMIN: product & stock management ----------------
+    @app.route("/api/admin/products", methods=["GET"])
+    def api_admin_products_route():
+        uid, err = _require_admin()
+        if err:
+            return err
+        return jsonify({"ok": True, "products": api_product_list()})
+
+    @app.route("/api/admin/product", methods=["POST", "OPTIONS"])
+    def api_admin_product_upsert_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_admin()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        key = (body.get("key") or "").strip().lower().replace(" ", "_")
+        name = (body.get("name") or "").strip()
+        icon = (body.get("icon") or "sparkles").strip()
+        try:
+            price = round(float(body.get("price")), 2)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_price"}), 400
+        if not key or not name or price < 0:
+            return jsonify({"ok": False, "error": "missing_fields"}), 400
+        products = load_products()
+        existing = products.get(key, {})
+        products[key] = {**existing, "name": name, "price": price, "icon": icon}
+        save_products(products)
+        return jsonify({"ok": True, "product": {"key": key, **products[key], "stock": stock_count(key)}})
+
+    @app.route("/api/admin/product/<key>", methods=["DELETE"])
+    def api_admin_product_delete_route(key):
+        uid, err = _require_admin()
+        if err:
+            return err
+        products = load_products()
+        if key not in products:
+            return jsonify({"ok": False, "error": "product_not_found"}), 404
+        del products[key]
+        save_products(products)
+        clear_stock_items(key)
+        img = _find_product_image(key)
+        if img:
+            try:
+                os.remove(img)
+            except OSError:
+                pass
+        return jsonify({"ok": True})
+
+    @app.route("/api/admin/product-image", methods=["POST", "OPTIONS"])
+    def api_admin_product_image_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_admin()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        key = (body.get("product_key") or "").strip()
+        data_url = body.get("image_data") or ""
+        products = load_products()
+        if key not in products:
+            return jsonify({"ok": False, "error": "product_not_found"}), 404
+        m = re.match(r"^data:image/(png|jpeg|jpg|webp);base64,(.+)$", data_url, re.S)
+        if not m:
+            return jsonify({"ok": False, "error": "invalid_image"}), 400
+        ext = {"jpeg": "jpg"}.get(m.group(1), m.group(1))
+        try:
+            raw = base64.b64decode(m.group(2))
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid_image"}), 400
+        if len(raw) > 3 * 1024 * 1024:
+            return jsonify({"ok": False, "error": "image_too_large"}), 400
+        old = _find_product_image(key)
+        if old:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+        fname = f"{key}.{ext}"
+        with open(os.path.join(IMAGES_DIR, fname), "wb") as f:
+            f.write(raw)
+        products[key]["image"] = f"/img/{fname}?v={int(time.time())}"
+        save_products(products)
+        return jsonify({"ok": True, "image": products[key]["image"]})
+
+    @app.route("/api/admin/stock", methods=["GET"])
+    def api_admin_stock_list_route():
+        uid, err = _require_admin()
+        if err:
+            return err
+        key = flask_request.args.get("product_key", "")
+        products = load_products()
+        if key not in products:
+            return jsonify({"ok": False, "error": "product_not_found"}), 404
+        return jsonify({"ok": True, "items": peek_stock_items(key)})
+
+    @app.route("/api/admin/stock", methods=["POST", "OPTIONS"])
+    def api_admin_stock_add_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_admin()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        key = body.get("product_key", "")
+        raw = body.get("items", "")
+        products = load_products()
+        if key not in products:
+            return jsonify({"ok": False, "error": "product_not_found"}), 404
+        lines = [l.strip() for l in str(raw).splitlines() if l.strip()]
+        if not lines:
+            return jsonify({"ok": False, "error": "no_items"}), 400
+        push_stock_items(key, lines)
+        return jsonify({"ok": True, "added": len(lines), "stock": stock_count(key)})
+
+    @app.route("/api/admin/stock/remove", methods=["POST", "OPTIONS"])
+    def api_admin_stock_remove_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_admin()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        key = body.get("product_key", "")
+        products = load_products()
+        if key not in products:
+            return jsonify({"ok": False, "error": "product_not_found"}), 404
+        if body.get("clear"):
+            removed = clear_stock_items(key)
+            return jsonify({"ok": True, "removed": removed, "stock": 0})
+        indices = body.get("indices") or []
+        try:
+            indices = [int(i) for i in indices]
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_indices"}), 400
+        removed, remaining = remove_stock_items_by_indices(key, indices)
+        return jsonify({"ok": True, "removed": len(removed), "stock": remaining})
 
     @app.route("/api/orders", methods=["GET"])
     def api_orders_route():
@@ -3811,5 +4044,7 @@ if __name__ == "__main__":
     if not BOT_TOKEN:
         raise SystemExit("❌ សូម set environment variable BOT_TOKEN ជាមុនសិន")
     start_keep_alive()
+    if not IS_SUBSCRIBER_BOT:
+        start_expiry_checker()  # ត្រួតពិនិត្យ subscription ជួល Bot ដែលផុតកំណត់ រាល់ 30 នាទី
     print("🤖 Bot កំពុងដំណើរការ...")
     bot.infinity_polling(skip_pending=True)
