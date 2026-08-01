@@ -1526,24 +1526,30 @@ ADMIN_BTN_SETQR = "🖼 កំណត់ QR ទូទាត់ដោយដៃ"
 
 
 def miniapp_reply_kb():
-    """ប៊ូតុងតែមួយគត់ (មិនថា user ឬ admin) សម្រាប់បើក Mini App — គ្រប់មុខងារ (ទិញ, Wallet,
-    ការកម្មង់, referral) និង admin panel (product/stock/broadcast) ត្រូវបានផ្លាស់ទីទៅនៅ
-    ក្នុង Mini App វិញទាំងអស់ (admin panel បង្ហាញស្វ័យប្រវត្តិលើ Mini App សម្រាប់ admin
-    ដោយផ្អែកលើ is_admin ពី /api/me)។ ចាស់ៗ (menu buttons ដាច់ៗ) មិនប្រើទៀតទេ ដើម្បីឲ្យ
-    user ចុចចូល Mini App តែមួយគត់។"""
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    """ប៊ូតុងច្រើនក្នុង reply keyboard (ទិញ, Wallet, ការកម្មង់, ប្រវត្តិរូប) ដែលនីមួយៗជា
+    web_app button ចង្អុលទៅ Mini App (miniapp.html) ដដែល — គ្រាន់តែបន្ថែម ?view=xxx ដើម្បី
+    ចូលត្រង់ tab ត្រឹមត្រូវភ្លាមៗ។ ព្រោះជា web_app button ដូចគ្នា ចុចប៊ូតុងណាក៏ដោយ Telegram
+    ផ្ញើ initData (profile/name/photo) ចូល Mini App ដូចគ្នាទាំងអស់ — ចុចប៊ូតុងណាក៏ទទួលបាន
+    data ដូចគ្នា (មិនមែនមានតែប៊ូតុងខៀវតែមួយទើបទាញ data បានទេ)។ admin panel នៅតែបង្ហាញ
+    ស្វ័យប្រវត្តិក្នុង Mini App សម្រាប់ admin ដោយផ្អែកលើ is_admin ពី /api/me។"""
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     added = False
     if MINIAPP_URL:
+        sep = "&" if "?" in MINIAPP_URL else "?"
+
+        def _wa_btn(label, view):
+            return types.KeyboardButton(label, web_app=types.WebAppInfo(url=f"{MINIAPP_URL}{sep}view={view}"))
+
         try:
-            kb.add(types.KeyboardButton(
-                f"🛍 បើក {STORE_NAME}",
-                web_app=types.WebAppInfo(url=MINIAPP_URL),
-            ))
+            kb.add(_wa_btn(f"🛍 {STORE_NAME}", "shop"))
+            kb.add(_wa_btn(BTN_WALLET, "wallet"), _wa_btn(BTN_ORDERS, "orders"))
+            kb.add(_wa_btn(BTN_REFERRAL, "profile"), _wa_btn("👤 ប្រវត្តិរូប", "profile"))
             added = True
         except Exception as e:
             # library ចាស់មិនស្គាល់ web_app ទេ ឬ URL មិនត្រឹមត្រូវ — កុំឲ្យ /start ដួល
             print(f"[miniapp_reply_kb] web_app button failed ({e}) -> fallback", flush=True)
     if not added:
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
         kb.add(preply_btn(BTN_HELP, style="primary"))
     return kb
 
