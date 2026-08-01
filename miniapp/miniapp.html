@@ -351,7 +351,10 @@
     </section>
 
     <section class="view" id="view-admin">
-      <div class="section-title">គ្រប់គ្រង Product</div>
+      <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
+        <span>គ្រប់គ្រង Product</span>
+        <button class="icon-btn accent" onclick="openBroadcastForm()" title="ផ្ញើសារទៅគ្រប់គ្នា" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="megaphone"></span></button>
+      </div>
       <div id="adminProductList"></div>
     </section>
   </main>
@@ -787,7 +790,7 @@ async function addStock(key){
   if (!items.trim()){ toast('សូមបញ្ចូល account យ៉ាងតិចមួយ', 'circle-alert'); return; }
   const res = await api('/api/admin/stock', {method:'POST', body: JSON.stringify({product_key: key, items})});
   if (res.ok){
-    toast(`បានបន្ថែម ${res.added} account`, 'check-circle');
+    toast(`បានបន្ថែម ${res.added} account · កំពុងជូនដំណឹង user`, 'check-circle');
     closeSheet();
     loadAdminProducts();
     loadProducts();
@@ -805,6 +808,32 @@ async function clearStock(key){
     loadProducts();
   } else {
     toast('មិនអាចលុប stock បានទេ', 'circle-alert');
+  }
+}
+
+function openBroadcastForm(){
+  document.getElementById('sheetBody').innerHTML = `
+    <div class="s-name">${ic('megaphone')} ផ្ញើសារទៅ User ទាំងអស់</div>
+    <div class="field"><label>អត្ថបទសារ</label>
+      <textarea id="bcText" rows="5" placeholder="វាយសារដែលចង់ផ្ញើទៅ user ទាំងអស់ក្នុង bot..."></textarea>
+    </div>
+    <button class="primary-btn" onclick="sendBroadcast()">${ic('send')} ផ្ញើឥឡូវនេះ</button>
+  `;
+  renderIcons();
+  document.getElementById('sheetOverlay').classList.add('show');
+}
+async function sendBroadcast(){
+  const text = document.getElementById('bcText').value.trim();
+  if (!text){ toast('សូមវាយសារជាមុនសិន', 'circle-alert'); return; }
+  if (!confirm('ផ្ញើសារនេះទៅ user ទាំងអស់ក្នុង bot?')) return;
+  const res = await api('/api/admin/broadcast', {method:'POST', body: JSON.stringify({text})});
+  if (res.ok){
+    toast(`កំពុងផ្ញើទៅ user ${res.total} នាក់`, 'check-circle');
+    haptic('success');
+    closeSheet();
+  } else {
+    toast('មិនអាចផ្ញើសារបានទេ', 'circle-alert');
+    haptic('error');
   }
 }
 
