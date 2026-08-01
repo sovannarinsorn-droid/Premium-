@@ -270,17 +270,37 @@ def save_emoji_map(m):
 
 def premium_text(text):
     """ជំនួស glyph ធម្មតា (ឧ. ✅) ដោយ HTML <tg-emoji> tag បើមាន custom_emoji_id
-    កំណត់ទុករួច។ ត្រូវការសារផ្ញើជា parse_mode HTML (ជា default របស់ bot នេះរួចហើយ)។"""
+    កំណត់ទុករួច។ ត្រូវការសារផ្ញើជា parse_mode HTML (ជា default របស់ bot នេះរួចហើយ)។
+
+    ចំណាំសំខាន់: ត្រូវ scan text ដើម​តែ pass តែមួយ (regex) មិនមែនធ្វើ text.replace()
+    ជាប់គ្នាច្រើនដងលើ text ដែលកែប្រែរួចនោះទេ — ព្រោះបើ glyph ខ្លីជា substring របស់
+    glyph វែង (ឧ. "✏" ស្ថិតក្នុង "✏️" ដែលមាន variation-selector) ការធ្វើ replace
+    ជាបន្តបន្ទាប់នឹងទៅ match glyph ខ្លីនោះ *ក្នុង* tag <tg-emoji> ដែល glyph វែង
+    ទើប wrap រួច ធ្វើឲ្យកើត nested/broken tag ដែល Telegram បដិសេធ ជាមួយ error
+    "Empty attribute name in the tag tg-emoji"។"""
     if not text:
         return text
     m = get_emoji_map()
     if not m:
         return text
-    for glyph, info in m.items():
-        icon_id = info.get("custom_emoji_id")
-        if icon_id and glyph in text:
-            text = text.replace(glyph, f'<tg-emoji emoji-id="{icon_id}">{glyph}</tg-emoji>')
-    return text
+    # យក glyph វែងបំផុតជាមុន ដូច emoji_icon_for() ដើម្បីកុំឲ្យ glyph ខ្លីត្រូវនឹង
+    # substring របស់ glyph វែង
+    items = sorted(
+        ((g, info.get("custom_emoji_id")) for g, info in m.items() if g),
+        key=lambda gi: len(gi[0]),
+        reverse=True,
+    )
+    items = [(g, icon_id) for g, icon_id in items if icon_id]
+    if not items:
+        return text
+    icon_map = {g: icon_id for g, icon_id in items}
+    pattern = re.compile("|".join(re.escape(g) for g, _ in items))
+
+    def _sub(match):
+        g = match.group(0)
+        return f'<tg-emoji emoji-id="{icon_map[g]}">{g}</tg-emoji>'
+
+    return pattern.sub(_sub, text)
 
 
 def emoji_icon_for(text):
