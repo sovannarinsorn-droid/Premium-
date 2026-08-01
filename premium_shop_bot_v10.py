@@ -46,6 +46,7 @@ import sys
 import html
 import json
 import time
+import uuid
 import signal
 import hashlib
 import hmac
@@ -867,9 +868,41 @@ def get_user(uid):
             "referred_by": None,   # uid (str) របស់អ្នកណែនាំ បើមាន
             "ref_count": 0,        # ចំនួនអ្នកដែលខ្លួនណែនាំបានចូលរួម
             "ref_earned": 0.0,     # commission សរុបដែលទទួលបានពី referral
+            "joined_at": time.strftime("%Y-%m-%d"),  # ថ្ងៃចូលរួមដំបូង (សម្រាប់ profile)
+            "first_name": None,    # ធ្វើ cache ព័ត៌មាន Telegram ចុងក្រោយ — សម្រាប់ admin មើលឈ្មោះ user
+            "last_name": None,
+            "username": None,
+            "last_seen": None,
         }
         save_users(users)
     return users[uid]
+
+
+def touch_user_profile(uid, first_name=None, last_name=None, username=None):
+    """រក្សាទុក/ធ្វើបច្ចុប្បន្នភាព ឈ្មោះ + username ចុងក្រោយរបស់ user ម្នាក់ៗ ដើម្បីឲ្យ admin
+    អាចមើលបញ្ជី user ព្រមទាំងឈ្មោះបានពី admin panel (មិនចាំបាច់ពឹងលើ Telegram API រាល់ដង)។
+    ហៅរាល់ពេលមាន Telegram profile ថ្មី (webapp initData ឬ command handler)។"""
+    with _lock:
+        users = load_users()
+        uid = str(uid)
+        if uid not in users:
+            users[uid] = {
+                "balance": 0.0, "orders": 0, "referred_by": None, "ref_count": 0,
+                "ref_earned": 0.0, "joined_at": time.strftime("%Y-%m-%d"),
+                "first_name": None, "last_name": None, "username": None, "last_seen": None,
+            }
+        u = users[uid]
+        if first_name is not None:
+            u["first_name"] = first_name
+        if last_name is not None:
+            u["last_name"] = last_name
+        if username is not None:
+            u["username"] = username
+        u["last_seen"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        if not u.get("joined_at"):
+            u["joined_at"] = time.strftime("%Y-%m-%d")
+        save_users(users)
+        return u
 
 
 def credit_referral_commission(referred_uid, deposit_amount):
@@ -1555,6 +1588,12 @@ def _link_referral_if_new(message):
 def cmd_start(message):
     _link_referral_if_new(message)
     get_user(message.from_user.id)
+    touch_user_profile(
+        message.from_user.id,
+        first_name=message.from_user.first_name,
+        last_name=getattr(message.from_user, "last_name", None),
+        username=getattr(message.from_user, "username", None),
+    )
     first_name = message.from_user.first_name or "មិត្ត"
     text = (
         f"👋 <b>សួស្តី {first_name}, សូមស្វាគមន៍មកកាន់ {STORE_NAME}!</b> 🏠\n\n"
@@ -3161,6 +3200,64 @@ def cmd_delstock(message):
         bot.reply_to(message, "ទំរង់ត្រូវជា: /delstock key")
 
 
+# ------------------------------------------------------------------
+# BROADCAST JOBS (Mini App admin panel) — ដំណើរការក្នុង background thread
+# ដើម្បីកុំឲ្យ HTTP request timeout ពេល user ច្រើននាក់ ប៉ុន្តែ admin នៅតែអាច
+# poll មើលលទ្ធផល (sent/failed) ក្រោយពេលបញ្ចប់បានតាម job_id (ដូច deposit polling)
+# ------------------------------------------------------------------
+_broadcast_jobs = {}
+_broadcast_jobs_lock = threading.Lock()
+
+
+def _new_broadcast_job(total):
+    job_id = uuid.uuid4().hex[:16]
+    with _broadcast_jobs_lock:
+        _broadcast_jobs[job_id] = {"status": "running", "sent": 0, "failed": 0, "total": total}
+    return job_id
+
+
+def _finish_broadcast_job(job_id, sent, failed):
+    with _broadcast_jobs_lock:
+        if job_id in _broadcast_jobs:
+            _broadcast_jobs[job_id].update({"status": "done", "sent": sent, "failed": failed})
+
+
+def _run_broadcast_job(job_id, fn, *args):
+    """ដំណើរការ broadcast function (ដែល return (sent, failed)) ក្នុង background thread
+    ហើយកត់ត្រាលទ្ធផលចូល _broadcast_jobs[job_id] ដើម្បីឲ្យ Mini App admin panel poll បាន។"""
+    try:
+        sent, failed = fn(*args)
+    except Exception as e:
+        print(f"[_run_broadcast_job] job={job_id} error: {e}", flush=True)
+        sent, failed = 0, 0
+    _finish_broadcast_job(job_id, sent, failed)
+
+
+def broadcast_media_message(job_id, text, image_bytes=None, video_bytes=None):
+    """ផ្ញើសារ (អត្ថបទ + ស្រេចចិត្តរូបភាព/video) ទៅ user ទាំងអស់ក្នុង bot — ប្រើដោយ
+    /api/admin/broadcast (Mini App)។ ធ្វើបច្ចុប្បន្នភាព _broadcast_jobs[job_id] ជាមួយ
+    ចំនួន sent/failed ពេលបញ្ចប់ ដើម្បីឲ្យ admin panel poll យកលទ្ធផលបង្ហាញ។"""
+    users = load_users()
+    uids = list(users.keys())
+    safe_text = html.escape(text) if text else ""
+    caption = f"📢 <b>សារពី Admin</b>\n\n{safe_text}" if safe_text else "📢 <b>សារពី Admin</b>"
+    sent, failed = 0, 0
+    for uid_str in uids:
+        try:
+            if image_bytes:
+                bot.send_photo(int(uid_str), io.BytesIO(image_bytes), caption=caption)
+            elif video_bytes:
+                bot.send_video(int(uid_str), io.BytesIO(video_bytes), caption=caption)
+            else:
+                bot.send_message(int(uid_str), caption)
+            sent += 1
+        except Exception:
+            failed += 1
+        time.sleep(0.05)  # ជៀសវាង Telegram rate limit
+    _finish_broadcast_job(job_id, sent, failed)
+    print(f"[broadcast_media_message] job={job_id} sent={sent} failed={failed}", flush=True)
+
+
 def broadcast_new_stock(key, added_count):
     """ជូនដំណឹងទៅ user ទាំងអស់ពេល stock ថ្មីត្រូវបានបន្ថែម (ដូចរូបគំរូ)"""
     products = load_products()
@@ -3969,6 +4066,17 @@ def start_keep_alive():
         if err:
             return err
         u = get_user(uid)
+        tg_user = _verify_webapp_init_data(_get_init_data()) or {}
+        if tg_user:
+            u = touch_user_profile(
+                uid,
+                first_name=tg_user.get("first_name"),
+                last_name=tg_user.get("last_name"),
+                username=tg_user.get("username"),
+            )
+        full_name = " ".join(
+            [p for p in [tg_user.get("first_name") or u.get("first_name"), tg_user.get("last_name") or u.get("last_name")] if p]
+        ).strip() or "Kairozen User"
         return jsonify({
             "ok": True,
             "uid": uid,
@@ -3978,6 +4086,10 @@ def start_keep_alive():
             "ref_count": u.get("ref_count", 0),
             "referral_link": referral_link_for(uid),
             "is_admin": bool(ADMIN_ID and int(uid) == int(ADMIN_ID)),
+            "name": full_name,
+            "username": tg_user.get("username") or u.get("username"),
+            "photo_url": tg_user.get("photo_url"),
+            "joined_at": u.get("joined_at"),
         })
 
     # ---------------- ADMIN: product & stock management ----------------
@@ -3987,6 +4099,32 @@ def start_keep_alive():
         if err:
             return err
         return jsonify({"ok": True, "products": api_product_list()})
+
+    # ---------------- ADMIN: user list (ឈ្មោះ/username + ស្ថិតិនីមួយៗ) ----------------
+    @app.route("/api/admin/users", methods=["GET"])
+    def api_admin_users_route():
+        _uid, err = _require_admin()
+        if err:
+            return err
+        users = load_users()
+        out = []
+        for u_id, u in users.items():
+            full_name = " ".join([p for p in [u.get("first_name"), u.get("last_name")] if p]).strip()
+            out.append({
+                "uid": u_id,
+                "name": full_name or "Kairozen User",
+                "username": u.get("username"),
+                "balance": u.get("balance", 0.0),
+                "orders": u.get("orders", 0),
+                "ref_count": u.get("ref_count", 0),
+                "ref_earned": u.get("ref_earned", 0.0),
+                "joined_at": u.get("joined_at"),
+                "last_seen": u.get("last_seen"),
+                "is_admin": bool(ADMIN_ID and int(u_id) == int(ADMIN_ID)),
+            })
+        # អ្នកប្រើប្រាស់សកម្មចុងក្រោយ បង្ហាញនៅលើគេ
+        out.sort(key=lambda x: x.get("last_seen") or "", reverse=True)
+        return jsonify({"ok": True, "users": out, "total": len(out)})
 
     @app.route("/api/admin/product", methods=["POST", "OPTIONS"])
     def api_admin_product_upsert_route():
@@ -4007,9 +4145,23 @@ def start_keep_alive():
             return jsonify({"ok": False, "error": "missing_fields"}), 400
         products = load_products()
         existing = products.get(key, {})
+        old_price = existing.get("price")
         products[key] = {**existing, "name": name, "price": price, "icon": icon}
         save_products(products)
-        return jsonify({"ok": True, "product": {"key": key, **products[key], "stock": stock_count(key)}})
+        price_job_id = None
+        # បើតម្លៃផ្លាស់ប្តូរលើ product ដែលមានស្រាប់ (មិនមែនបង្កើតថ្មី) ហើយ admin មិនបានបិទ
+        # ការជូនដំណឹង (notify=false) — ជូនដំណឹងទៅ user ទាំងអស់ស្វ័យប្រវត្តិ (📉/📈)
+        if old_price is not None and old_price != price and body.get("notify", True):
+            price_job_id = _new_broadcast_job(len(load_users()))
+            threading.Thread(
+                target=_run_broadcast_job, args=(price_job_id, broadcast_price_change, key, old_price, price),
+                daemon=True,
+            ).start()
+        return jsonify({
+            "ok": True,
+            "product": {"key": key, **products[key], "stock": stock_count(key)},
+            "price_broadcast_job": price_job_id,
+        })
 
     @app.route("/api/admin/product/<key>", methods=["DELETE"])
     def api_admin_product_delete_route(key):
@@ -4106,9 +4258,13 @@ def start_keep_alive():
                 fresh_products[key]["low_stock_alerted"] = False
                 save_products(fresh_products)
         # ជូនដំណឹងទៅ user ទាំងអស់ក្នុង bot ថាមាន stock ថ្មី — ធ្វើក្នុង background thread
-        # ដើម្បីកុំឲ្យ admin ត្រូវរង់ចាំ (អាចមាន user រាប់រយនាក់)
-        threading.Thread(target=broadcast_new_stock, args=(key, added), daemon=True).start()
-        return jsonify({"ok": True, "added": added, "stock": stock_count(key)})
+        # ដើម្បីកុំឲ្យ admin ត្រូវរង់ចាំ (អាចមាន user រាប់រយនាក់) ប៉ុន្តែកត់ត្រា job ដើម្បីឲ្យ
+        # Mini App admin panel poll មើលចំនួន sent/failed ក្រោយពេលបញ្ចប់
+        stock_job_id = _new_broadcast_job(len(load_users()))
+        threading.Thread(
+            target=_run_broadcast_job, args=(stock_job_id, broadcast_new_stock, key, added), daemon=True,
+        ).start()
+        return jsonify({"ok": True, "added": added, "stock": stock_count(key), "broadcast_job": stock_job_id})
 
     @app.route("/api/admin/stock/remove", methods=["POST", "OPTIONS"])
     def api_admin_stock_remove_route():
@@ -4135,9 +4291,10 @@ def start_keep_alive():
 
     @app.route("/api/admin/broadcast", methods=["POST", "OPTIONS"])
     def api_admin_broadcast_route():
-        """ផ្ញើសារជាអត្ថបទទៅ user ទាំងអស់ក្នុង bot (ដូច ADMIN_BTN_BROADCAST ក្នុង chat
-        ដែរ ប៉ុន្តែហៅតាម Mini App admin panel) — ដំណើរការក្នុង background thread
-        ព្រោះអាចចំណាយពេលនឹង user ច្រើននាក់។"""
+        """ផ្ញើសារ (អត្ថបទ + ស្រេចចិត្តរូបភាព ឬ video) ទៅ user ទាំងអស់ក្នុង bot តាម Mini App
+        admin panel — ដំណើរការក្នុង background thread ព្រោះអាចចំណាយពេលនឹង user ច្រើននាក់
+        ។ Return job_id ដើម្បីឲ្យ admin panel poll មើលចំនួន sent/failed តាម
+        /api/admin/broadcast/status?job_id=..."""
         if flask_request.method == "OPTIONS":
             return "", 204
         uid, err = _require_admin()
@@ -4145,26 +4302,52 @@ def start_keep_alive():
             return err
         body = flask_request.get_json(silent=True) or {}
         text = (body.get("text") or "").strip()
-        if not text:
+        image_data = body.get("image_data") or ""
+        video_data = body.get("video_data") or ""
+        if not text and not image_data and not video_data:
             return jsonify({"ok": False, "error": "empty_text"}), 400
-        users = load_users()
-        uids = list(users.keys())
-        total = len(uids)
 
-        def _run_broadcast():
-            sent, failed = 0, 0
-            safe_text = html.escape(text)
-            for uid_str in uids:
-                try:
-                    bot.send_message(int(uid_str), f"📢 <b>សារពី Admin</b>\n\n{safe_text}")
-                    sent += 1
-                except Exception:
-                    failed += 1
-                time.sleep(0.05)  # ជៀសវាង Telegram rate limit
-            print(f"[api_admin_broadcast] sent={sent} failed={failed}", flush=True)
+        image_bytes = None
+        video_bytes = None
+        if image_data:
+            m = re.match(r"^data:image/(png|jpeg|jpg|webp);base64,(.+)$", image_data, re.S)
+            if not m:
+                return jsonify({"ok": False, "error": "invalid_image"}), 400
+            try:
+                image_bytes = base64.b64decode(m.group(2))
+            except Exception:
+                return jsonify({"ok": False, "error": "invalid_image"}), 400
+            if len(image_bytes) > 8 * 1024 * 1024:
+                return jsonify({"ok": False, "error": "image_too_large"}), 400
+        elif video_data:
+            m = re.match(r"^data:video/(mp4|quicktime|webm|x-matroska);base64,(.+)$", video_data, re.S)
+            if not m:
+                return jsonify({"ok": False, "error": "invalid_video"}), 400
+            try:
+                video_bytes = base64.b64decode(m.group(2))
+            except Exception:
+                return jsonify({"ok": False, "error": "invalid_video"}), 400
+            if len(video_bytes) > 20 * 1024 * 1024:
+                return jsonify({"ok": False, "error": "video_too_large"}), 400
 
-        threading.Thread(target=_run_broadcast, daemon=True).start()
-        return jsonify({"ok": True, "total": total})
+        total = len(load_users())
+        job_id = _new_broadcast_job(total)
+        threading.Thread(
+            target=broadcast_media_message, args=(job_id, text, image_bytes, video_bytes), daemon=True,
+        ).start()
+        return jsonify({"ok": True, "total": total, "job_id": job_id})
+
+    @app.route("/api/admin/broadcast/status", methods=["GET"])
+    def api_admin_broadcast_status_route():
+        _uid, err = _require_admin()
+        if err:
+            return err
+        job_id = flask_request.args.get("job_id", "")
+        with _broadcast_jobs_lock:
+            job = _broadcast_jobs.get(job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "job_not_found"}), 404
+        return jsonify({"ok": True, **job})
 
     @app.route("/api/orders", methods=["GET"])
     def api_orders_route():
