@@ -469,29 +469,29 @@
         <div class="p-username" id="pfUsername"></div>
         <div class="p-idrow" id="pfUidRow">
           <span class="mono" id="pfUid">ID: —</span>
-          <button class="mini-copy" onclick="copyText(String(ME.uid||''), 'បានចម្លង User ID')">${ic('copy')}</button>
+          <button class="mini-copy" onclick="copyText(String(ME.uid||''), 'បានចម្លង User ID')"><span class="ic" data-icon="copy"></span></button>
         </div>
         <div class="p-joined" id="pfJoined"></div>
       </div>
 
       <div class="stat-grid">
         <div class="stat-box">
-          <div class="s-ic">${ic('wallet')}</div>
+          <div class="s-ic"><span class="ic" data-icon="wallet"></span></div>
           <div class="s-val num" id="pfBalance">$0.00</div>
           <div class="s-lbl">សមតុល្យ</div>
         </div>
         <div class="stat-box">
-          <div class="s-ic">${ic('receipt')}</div>
+          <div class="s-ic"><span class="ic" data-icon="receipt"></span></div>
           <div class="s-val num" id="pfOrders">0</div>
           <div class="s-lbl">ការកម្ម៉ង់</div>
         </div>
         <div class="stat-box">
-          <div class="s-ic">${ic('users')}</div>
+          <div class="s-ic"><span class="ic" data-icon="users"></span></div>
           <div class="s-val num" id="pfRefCount">0</div>
           <div class="s-lbl">អ្នកណែនាំបាន</div>
         </div>
         <div class="stat-box">
-          <div class="s-ic">${ic('hand-coins')}</div>
+          <div class="s-ic"><span class="ic" data-icon="hand-coins"></span></div>
           <div class="s-val num" id="pfRefEarned">$0.00</div>
           <div class="s-lbl">ចំណូលណែនាំ</div>
         </div>
@@ -502,9 +502,9 @@
         <div class="ref-desc">ចែករំលែកតំណនេះ ទទួលកម្រៃ ៥% រាល់ពេលមិត្តភក្តិបញ្ចូលលុយ</div>
         <div class="ref-link-row">
           <span class="ref-link mono" id="pfRefLink">—</span>
-          <button class="mini-copy" onclick="copyText(ME.referral_link||'', 'បានចម្លងតំណណែនាំ')">${ic('copy')}</button>
+          <button class="mini-copy" onclick="copyText(ME.referral_link||'', 'បានចម្លងតំណណែនាំ')"><span class="ic" data-icon="copy"></span></button>
         </div>
-        <button class="primary-btn" style="margin-top:10px;" onclick="shareReferral()">${ic('share-2')} ចែករំលែកទៅមិត្តភក្តិ</button>
+        <button class="primary-btn" style="margin-top:10px;" onclick="shareReferral()"><span class="ic" data-icon="share-2"></span> ចែករំលែកទៅមិត្តភក្តិ</button>
       </div>
 
       <div class="section-title">ផ្សេងៗ</div>
@@ -534,8 +534,8 @@
         <button class="icon-btn accent" onclick="openBroadcastForm()" title="ផ្ញើសារទៅគ្រប់គ្នា" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="megaphone"></span></button>
       </div>
       <div class="seg-tabs" id="adminSegTabs">
-        <button class="seg active" data-seg="products" onclick="switchAdminSeg('products')">${ic('package')} Product</button>
-        <button class="seg" data-seg="users" onclick="switchAdminSeg('users')">${ic('users')} User</button>
+        <button class="seg active" data-seg="products" onclick="switchAdminSeg('products')"><span class="ic" data-icon="package"></span> Product</button>
+        <button class="seg" data-seg="users" onclick="switchAdminSeg('users')"><span class="ic" data-icon="users"></span> User</button>
       </div>
       <div id="adminProductPane">
         <div id="adminProductList"></div>
@@ -1255,6 +1255,15 @@ loadProducts();
 loadMe();
 // dev/preview fallback: Telegram often makes initials show as '?' outside the app;
 // this just leaves the avatar showing '?' gracefully until /api/me responds.
+
+// reply-keyboard buttons (Wallet/Orders/Profile/...) each point to this same miniapp
+// URL with a ?view=xxx query string so they land straight on the right tab, pulling
+// the same profile/data as the main blue button (via initData -> /api/me above).
+(function openInitialView(){
+  const v = new URLSearchParams(location.search).get('view');
+  const valid = ['shop','wallet','orders','profile','admin'];
+  if (v && valid.includes(v)) goto(v);
+})();
 </script>
 </body>
 </html>
