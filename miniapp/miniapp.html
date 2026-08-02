@@ -222,11 +222,48 @@
   .owner-strip .o-owner-sub{font-size:11px; color:var(--ink-dim); margin-top:2px;}
 
   /* ---------- orders ---------- */
-  .order-row{display:flex; gap:12px; padding:14px 4px; border-bottom:1px solid var(--line); align-items:center;}
+  .order-row{display:flex; gap:12px; padding:14px 4px; border-bottom:1px solid var(--line); align-items:flex-start;}
   .order-row:last-child{border-bottom:none;}
   .order-row .o-name{font-weight:600; font-size:14px;}
   .order-row .o-meta{font-size:12px; color:var(--ink-dim); margin-top:3px;}
-  .order-row .o-price{font-family:'Sora'; font-weight:700; color:var(--gold); margin-left:auto; font-size:14.5px;}
+  .order-row .o-price{font-family:'Sora'; font-weight:700; color:var(--gold); font-size:14.5px; text-align:right;}
+  .status-pill{
+    display:inline-flex; align-items:center; gap:4px; margin-top:6px;
+    font-size:10px; padding:3px 8px 3px 6px; border-radius:999px; font-weight:600; width:fit-content;
+    background:rgba(51,214,159,.12); color:var(--success);
+  }
+  .status-pill .ic svg{width:11px; height:11px;}
+  .mini-view-btn{
+    margin-top:8px; border:1px solid var(--line); background:var(--bg-2); color:var(--ink-dim);
+    font-size:11px; font-weight:600; padding:5px 10px; border-radius:999px; cursor:pointer; font-family:inherit;
+  }
+
+  /* ---------- ratings / reviews ---------- */
+  .rating-line{display:flex; align-items:center; gap:4px; font-size:11.5px; color:var(--gold); margin-top:-2px;}
+  .rating-line .ic svg{width:12px; height:12px; fill:var(--gold);}
+  .star-row{display:flex; gap:8px; justify-content:center; margin-top:6px;}
+  .star-pick{
+    width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    color:var(--ink-dim); cursor:pointer; background:var(--bg-2); border:1px solid var(--line);
+  }
+  .star-pick .ic svg{width:17px; height:17px;}
+  .star-pick.active{color:var(--gold); border-color:rgba(245,197,66,.4); background:rgba(245,197,66,.1);}
+  .star-pick.active .ic svg{fill:var(--gold);}
+
+  /* ---------- promo banner ---------- */
+  .promo-banner{
+    display:flex; align-items:center; gap:12px; background:linear-gradient(120deg, rgba(124,92,255,.18), rgba(245,197,66,.14));
+    border:1px solid rgba(245,197,66,.35); border-radius:16px; padding:14px 16px; margin-bottom:14px;
+  }
+  .promo-banner .ic{color:var(--gold); flex-shrink:0;}
+  .promo-title{font-weight:700; font-size:14px;}
+  .promo-sub{font-size:12px; color:var(--ink-dim); margin-top:2px;}
+
+  /* ---------- language toggle ---------- */
+  .lang-badge{
+    margin-left:auto; margin-right:6px; font-size:10.5px; font-weight:700; color:var(--gold);
+    background:rgba(245,197,66,.14); padding:3px 8px; border-radius:999px;
+  }
 
   .empty{text-align:center; padding:50px 20px; color:var(--ink-dim);}
   .empty .ic{margin:0 auto 12px; color:var(--ink-dim); opacity:.6;}
@@ -404,7 +441,7 @@
   <header class="topbar">
     <div class="brand">
       <div class="mark"><span class="dot"></span>Kairozen Store</div>
-      <div class="sub">គណនី Premium ត្រឹមត្រូវ ១០០%</div>
+      <div class="sub" data-i18n="tagline">គណនី Premium ត្រឹមត្រូវ ១០០%</div>
     </div>
     <div class="top-actions">
       <div class="wallet-chip" onclick="goto('wallet')">
@@ -417,23 +454,24 @@
 
   <main>
     <section class="view active" id="view-shop">
+      <div id="promoBanner"></div>
       <div class="search-box">
         <span class="ic ic-18" data-icon="search"></span>
-        <input type="text" id="searchInput" placeholder="ស្វែងរកផលិតផល...">
+        <input type="text" id="searchInput" data-i18n-ph="search_ph" placeholder="ស្វែងរកផលិតផល...">
       </div>
-      <div class="section-title">ផលិតផលទាំងអស់</div>
+      <div class="section-title" data-i18n="all_products">ផលិតផលទាំងអស់</div>
       <div class="grid" id="productGrid"></div>
     </section>
 
     <section class="view" id="view-wallet">
       <div class="balance-hero">
         <div class="ring"></div>
-        <div class="label">សមតុល្យ Wallet</div>
+        <div class="label" data-i18n="wallet_balance">សមតុល្យ Wallet</div>
         <div class="value num" id="walletBalance">$0.00</div>
         <div class="ref" id="walletRef">ការកម្ម៉ង់សរុប៖ 0</div>
       </div>
 
-      <div class="section-title">បញ្ចូលលុយចូល Wallet</div>
+      <div class="section-title" data-i18n="topup_title">បញ្ចូលលុយចូល Wallet</div>
       <div class="chip-row" id="amtChips">
         <div class="amt-chip" data-v="2">$2</div>
         <div class="amt-chip" data-v="5">$5</div>
@@ -441,10 +479,10 @@
         <div class="amt-chip" data-v="20">$20</div>
       </div>
       <div class="custom-amt">
-        <input type="number" inputmode="decimal" id="customAmt" placeholder="ចំនួនផ្សេង (ឧ. 7.50)">
+        <input type="number" inputmode="decimal" id="customAmt" data-i18n-ph="custom_amt_ph" placeholder="ចំនួនផ្សេង (ឧ. 7.50)">
       </div>
       <button class="primary-btn" id="depositBtn" onclick="createDeposit()">
-        <span class="ic ic-18" data-icon="qr-code"></span> បង្កើត KHQR ទូទាត់
+        <span class="ic ic-18" data-icon="qr-code"></span> <span data-i18n="create_qr">បង្កើត KHQR ទូទាត់</span>
       </button>
 
       <div id="ticketHost"></div>
@@ -455,10 +493,10 @@
         <div class="u-avatar" id="ordersOwnerAv">?</div>
         <div>
           <div class="o-owner-name" id="ordersOwnerName">—</div>
-          <div class="o-owner-sub">ការកម្ម៉ង់ខាងក្រោមទាំងអស់ ជាកម្មសិទ្ធិគណនីរបស់អ្នក</div>
+          <div class="o-owner-sub" data-i18n="order_owner_sub">ការកម្ម៉ង់ខាងក្រោមទាំងអស់ ជាកម្មសិទ្ធិគណនីរបស់អ្នក</div>
         </div>
       </div>
-      <div class="section-title">ប្រវត្តិការកម្ម៉ង់</div>
+      <div class="section-title" data-i18n="order_history">ប្រវត្តិការកម្ម៉ង់</div>
       <div id="ordersList"></div>
     </section>
 
@@ -478,50 +516,56 @@
         <div class="stat-box">
           <div class="s-ic"><span class="ic" data-icon="wallet"></span></div>
           <div class="s-val num" id="pfBalance">$0.00</div>
-          <div class="s-lbl">សមតុល្យ</div>
+          <div class="s-lbl" data-i18n="stat_balance">សមតុល្យ</div>
         </div>
         <div class="stat-box">
           <div class="s-ic"><span class="ic" data-icon="receipt"></span></div>
           <div class="s-val num" id="pfOrders">0</div>
-          <div class="s-lbl">ការកម្ម៉ង់</div>
+          <div class="s-lbl" data-i18n="stat_orders">ការកម្ម៉ង់</div>
         </div>
         <div class="stat-box">
           <div class="s-ic"><span class="ic" data-icon="users"></span></div>
           <div class="s-val num" id="pfRefCount">0</div>
-          <div class="s-lbl">អ្នកណែនាំបាន</div>
+          <div class="s-lbl" data-i18n="stat_ref_count">អ្នកណែនាំបាន</div>
         </div>
         <div class="stat-box">
           <div class="s-ic"><span class="ic" data-icon="hand-coins"></span></div>
           <div class="s-val num" id="pfRefEarned">$0.00</div>
-          <div class="s-lbl">ចំណូលណែនាំ</div>
+          <div class="s-lbl" data-i18n="stat_ref_earned">ចំណូលណែនាំ</div>
         </div>
       </div>
 
-      <div class="section-title">តំណណែនាំមិត្តភក្តិ</div>
+      <div class="section-title" data-i18n="referral_link_title">តំណណែនាំមិត្តភក្តិ</div>
       <div class="ref-card">
-        <div class="ref-desc">ចែករំលែកតំណនេះ ទទួលកម្រៃ ៥% រាល់ពេលមិត្តភក្តិបញ្ចូលលុយ</div>
+        <div class="ref-desc" data-i18n="referral_desc">ចែករំលែកតំណនេះ ទទួលកម្រៃ ៥% រាល់ពេលមិត្តភក្តិបញ្ចូលលុយ</div>
         <div class="ref-link-row">
           <span class="ref-link mono" id="pfRefLink">—</span>
           <button class="mini-copy" onclick="copyText(ME.referral_link||'', 'បានចម្លងតំណណែនាំ')"><span class="ic" data-icon="copy"></span></button>
         </div>
-        <button class="primary-btn" style="margin-top:10px;" onclick="shareReferral()"><span class="ic" data-icon="share-2"></span> ចែករំលែកទៅមិត្តភក្តិ</button>
+        <button class="primary-btn" style="margin-top:10px;" onclick="shareReferral()"><span class="ic" data-icon="share-2"></span> <span data-i18n="share_friend">ចែករំលែកទៅមិត្តភក្តិ</span></button>
       </div>
 
-      <div class="section-title">ផ្សេងៗ</div>
+      <div class="section-title" data-i18n="misc">ផ្សេងៗ</div>
       <div class="list-card">
         <div class="list-row" onclick="goto('orders')">
           <span class="ic ic-20" data-icon="receipt-text"></span>
-          <span>ប្រវត្តិការកម្ម៉ង់</span>
+          <span data-i18n="order_history_row">ប្រវត្តិការកម្ម៉ង់</span>
           <span class="ic ic-18 chev" data-icon="chevron-right"></span>
         </div>
         <div class="list-row" onclick="contactSupport()">
           <span class="ic ic-20" data-icon="life-buoy"></span>
-          <span>ទាក់ទង Support</span>
+          <span data-i18n="contact_support">ទាក់ទង Support</span>
           <span class="ic ic-18 chev" data-icon="chevron-right"></span>
         </div>
         <div class="list-row" onclick="copyText(ME.referral_link||'', 'បានចម្លងតំណណែនាំ')">
           <span class="ic ic-20" data-icon="gift"></span>
-          <span>ណែនាំមិត្តភក្តិ</span>
+          <span data-i18n="invite_friend">ណែនាំមិត្តភក្តិ</span>
+          <span class="ic ic-18 chev" data-icon="chevron-right"></span>
+        </div>
+        <div class="list-row" onclick="toggleLang()">
+          <span class="ic ic-20" data-icon="languages"></span>
+          <span data-i18n="language">ភាសា / Language</span>
+          <span class="lang-badge" id="pfLangBadge">KM</span>
           <span class="ic ic-18 chev" data-icon="chevron-right"></span>
         </div>
       </div>
@@ -531,7 +575,10 @@
     <section class="view" id="view-admin">
       <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
         <span>ផ្ទាំងគ្រប់គ្រង</span>
-        <button class="icon-btn accent" onclick="openBroadcastForm()" title="ផ្ញើសារទៅគ្រប់គ្នា" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="megaphone"></span></button>
+        <div style="display:flex; gap:8px;">
+          <button class="icon-btn accent" onclick="openPromoForm()" title="Promo Banner" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="sparkles"></span></button>
+          <button class="icon-btn accent" onclick="openBroadcastForm()" title="ផ្ញើសារទៅគ្រប់គ្នា" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="megaphone"></span></button>
+        </div>
       </div>
       <div class="seg-tabs" id="adminSegTabs">
         <button class="seg active" data-seg="products" onclick="switchAdminSeg('products')"><span class="ic" data-icon="package"></span> Product</button>
@@ -551,11 +598,11 @@
   </main>
 
   <nav class="tabbar">
-    <button data-view="shop" class="active" onclick="goto('shop')"><span class="ic ic-20" data-icon="shopping-cart"></span>ទំនិញ</button>
-    <button data-view="wallet" onclick="goto('wallet')"><span class="ic ic-20" data-icon="wallet"></span>Wallet</button>
-    <button data-view="orders" onclick="goto('orders')"><span class="ic ic-20" data-icon="receipt"></span>កម្ម៉ង់</button>
-    <button data-view="profile" onclick="goto('profile')"><span class="ic ic-20" data-icon="user"></span>ប្រវត្តិរូប</button>
-    <button data-view="admin" id="adminTabBtn" onclick="goto('admin')" style="display:none;"><span class="ic ic-20" data-icon="shield"></span>Admin</button>
+    <button data-view="shop" class="active" onclick="goto('shop')"><span class="ic ic-20" data-icon="shopping-cart"></span><span data-i18n="nav_shop">ទំនិញ</span></button>
+    <button data-view="wallet" onclick="goto('wallet')"><span class="ic ic-20" data-icon="wallet"></span><span data-i18n="nav_wallet">Wallet</span></button>
+    <button data-view="orders" onclick="goto('orders')"><span class="ic ic-20" data-icon="receipt"></span><span data-i18n="nav_orders">កម្ម៉ង់</span></button>
+    <button data-view="profile" onclick="goto('profile')"><span class="ic ic-20" data-icon="user"></span><span data-i18n="nav_profile">ប្រវត្តិរូប</span></button>
+    <button data-view="admin" id="adminTabBtn" onclick="goto('admin')" style="display:none;"><span class="ic ic-20" data-icon="shield"></span><span data-i18n="nav_admin">Admin</span></button>
   </nav>
 </div>
 
@@ -629,12 +676,73 @@ async function api(path, opts) {
 function money(n){ return '$' + (Number(n)||0).toFixed(2); }
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
 
+/* ---------------- i18n (KM/EN) ---------------- */
+const I18N = {
+  km: {
+    tagline:'គណនី Premium ត្រឹមត្រូវ ១០០%',
+    nav_shop:'ទំនិញ', nav_wallet:'Wallet', nav_orders:'កម្ម៉ង់', nav_profile:'ប្រវត្តិរូប', nav_admin:'Admin',
+    search_ph:'ស្វែងរកផលិតផល...', all_products:'ផលិតផលទាំងអស់',
+    no_products:'មិនទាន់មានផលិតផលទេ', no_search_results:'រកមិនឃើញផលិតផលត្រូវនឹងការស្វែងរក',
+    out_of_stock:'អស់ស្តុក', in_stock_prefix:'នៅសល់ ', buy:'ទិញ',
+    wallet_balance:'សមតុល្យ Wallet', topup_title:'បញ្ចូលលុយចូល Wallet', custom_amt_ph:'ចំនួនផ្សេង (ឧ. 7.50)',
+    create_qr:'បង្កើត KHQR ទូទាត់',
+    order_history:'ប្រវត្តិការកម្ម៉ង់', no_orders:'មិនទាន់មានការកម្ម៉ង់ណាមួយទេ',
+    order_owner_sub:'ការកម្ម៉ង់ខាងក្រោមទាំងអស់ ជាកម្មសិទ្ធិគណនីរបស់អ្នក',
+    stat_balance:'សមតុល្យ', stat_orders:'ការកម្ម៉ង់', stat_ref_count:'អ្នកណែនាំបាន', stat_ref_earned:'ចំណូលណែនាំ',
+    referral_link_title:'តំណណែនាំមិត្តភក្តិ', referral_desc:'ចែករំលែកតំណនេះ ទទួលកម្រៃ ៥% រាល់ពេលមិត្តភក្តិបញ្ចូលលុយ',
+    share_friend:'ចែករំលែកទៅមិត្តភក្តិ', misc:'ផ្សេងៗ', order_history_row:'ប្រវត្តិការកម្ម៉ង់',
+    contact_support:'ទាក់ទង Support', invite_friend:'ណែនាំមិត្តភក្តិ', language:'ភាសា / Language',
+    view_details:'មើលលម្អិត', status_completed:'ជោគជ័យ', rate_product:'វាយតម្លៃផលិតផលនេះ',
+    already_rated:'អរគុណ! អ្នកបានវាយតម្លៃរួច', submit_review:'ដាក់ស្នើ Review', review_ph:'មតិយោបល់ (ស្រេចចិត្ត)',
+    thanks_review:'អរគុណសម្រាប់ការវាយតម្លៃ!', delivered_items:'របស់ដែលបានទទួល', close:'បិទ',
+    pick_star_first:'សូមជ្រើសរើសផ្កាយវាយតម្លៃ',
+  },
+  en: {
+    tagline:'100% Genuine Premium Accounts',
+    nav_shop:'Shop', nav_wallet:'Wallet', nav_orders:'Orders', nav_profile:'Profile', nav_admin:'Admin',
+    search_ph:'Search products...', all_products:'All Products',
+    no_products:'No products yet', no_search_results:'No products match your search',
+    out_of_stock:'Out of stock', in_stock_prefix:'In stock: ', buy:'Buy',
+    wallet_balance:'Wallet Balance', topup_title:'Top Up Wallet', custom_amt_ph:'Custom amount (e.g. 7.50)',
+    create_qr:'Generate KHQR Payment',
+    order_history:'Order History', no_orders:'No orders yet',
+    order_owner_sub:'All orders below belong to your account',
+    stat_balance:'Balance', stat_orders:'Orders', stat_ref_count:'Referrals', stat_ref_earned:'Ref. Earnings',
+    referral_link_title:'Referral Link', referral_desc:'Share this link, earn 5% every time a friend tops up',
+    share_friend:'Share with Friends', misc:'More', order_history_row:'Order History',
+    contact_support:'Contact Support', invite_friend:'Invite a Friend', language:'Language / ភាសា',
+    view_details:'View Details', status_completed:'Completed', rate_product:'Rate this product',
+    already_rated:'Thanks! You already rated this', submit_review:'Submit Review', review_ph:'Comment (optional)',
+    thanks_review:'Thanks for your review!', delivered_items:'Items received', close:'Close',
+    pick_star_first:'Please pick a star rating',
+  },
+};
+let LANG = 'km';
+function t(key){ return (I18N[LANG] && I18N[LANG][key]) || I18N.km[key] || key; }
+function applyI18n(){
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.getAttribute('data-i18n')); });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.getAttribute('data-i18n-ph')); });
+  renderIcons();
+}
+function toggleLang(){
+  LANG = LANG === 'km' ? 'en' : 'km';
+  applyI18n();
+  renderProductGrid();
+  if (ME && ME.ok) renderProfile();
+  const badge = document.getElementById('pfLangBadge');
+  if (badge) badge.textContent = LANG.toUpperCase();
+  toast(LANG === 'en' ? 'Switched to English' : 'ប្តូរទៅភាសាខ្មែររួចរាល់', 'languages');
+  haptic('light');
+  api('/api/me', {method:'POST', body: JSON.stringify({lang: LANG})});
+}
+
 /* ---------------- navigation ---------------- */
 function goto(view){
   haptic('light');
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+view).classList.add('active');
   document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('active', b.dataset.view===view));
+  if (view === 'shop') loadPromo();
   if (view === 'wallet') loadMe();
   if (view === 'orders') { loadMe(); loadOrders(); }
   if (view === 'admin') { if (currentAdminSeg === 'users') loadAdminUsers(); else loadAdminProducts(); }
@@ -667,7 +775,7 @@ function renderProductGrid(){
   const list = q ? PRODUCTS.filter(p => p.name.toLowerCase().includes(q)) : PRODUCTS;
   const grid = document.getElementById('productGrid');
   if (!list.length){
-    grid.innerHTML = `<div class="empty">${ic('package-search')}<div>${q ? 'រកមិនឃើញផលិតផលត្រូវនឹងការស្វែងរក' : 'មិនទាន់មានផលិតផលទេ'}</div></div>`;
+    grid.innerHTML = `<div class="empty">${ic('package-search')}<div>${q ? t('no_search_results') : t('no_products')}</div></div>`;
     renderIcons();
     return;
   }
@@ -681,10 +789,11 @@ function renderProductGrid(){
       ${isHot ? `<span class="badge-hot">${ic('flame')} លក់ដាច់</span>` : ''}
       ${p.image ? `<img class="card-img" src="${p.image}" alt="">` : `<div class="icon-tile">${ic(productIconName(p.icon))}</div>`}
       <div class="name">${escapeHtml(p.name)}</div>
-      <span class="stock-pill ${low||out?'low':''}">${ic(out?'ban':'boxes')}${out ? 'អស់ស្តុក' : 'នៅសល់ ' + p.stock}</span>
+      ${p.rating_count > 0 ? `<div class="rating-line">${ic('star')} ${p.rating.toFixed(1)} <span style="color:var(--ink-dim);">(${p.rating_count})</span></div>` : ''}
+      <span class="stock-pill ${low||out?'low':''}">${ic(out?'ban':'boxes')}${out ? t('out_of_stock') : t('in_stock_prefix') + p.stock}</span>
       <div class="meta"><span class="price num">${money(p.price)}</span></div>
       <button class="buy-btn" ${out?'disabled':''} onclick="haptic('light'); openBuySheet('${p.key}')">
-        ${ic(out ? 'ban' : 'shopping-cart')} ${out?'អស់ស្តុក':'ទិញ'}
+        ${ic(out ? 'ban' : 'shopping-cart')} ${out ? t('out_of_stock') : t('buy')}
       </button>
     </div>`;
   }).join('');
@@ -754,11 +863,20 @@ function initials(name){
 }
 async function loadMe(){
   const res = await api('/api/me');
-  if (!res.ok) return res;
+  if (!res.ok){
+    toast('មិនអាចផ្ទៀងផ្ទាត់អត្តសញ្ញាណបានទេ — សូមបើកម្តងទៀតតាមប៊ូតុង Mini App', 'circle-alert');
+    return res;
+  }
   ME = res;
+  if (res.lang && (res.lang === 'km' || res.lang === 'en') && res.lang !== LANG){
+    LANG = res.lang;
+    applyI18n();
+  }
+  const langBadge = document.getElementById('pfLangBadge');
+  if (langBadge) langBadge.textContent = LANG.toUpperCase();
   document.getElementById('chipBalance').textContent = money(res.balance);
   document.getElementById('walletBalance').textContent = money(res.balance);
-  document.getElementById('walletRef').textContent = `ការកម្ម៉ង់សរុប៖ ${res.orders} · ណែនាំបានប្រាក់៖ ${money(res.ref_earned)}`;
+  document.getElementById('walletRef').textContent = `${t('stat_orders')}: ${res.orders} · ${t('stat_ref_earned')}: ${money(res.ref_earned)}`;
   if (res.is_admin && !IS_ADMIN){
     IS_ADMIN = true;
     document.getElementById('adminTabBtn').style.display = '';
@@ -898,27 +1016,136 @@ function skeletonRows(n){
     </div>
   `).join('');
 }
+let ORDERS = [];
 async function loadOrders(){
   document.getElementById('ordersList').innerHTML = skeletonRows(3);
   const res = await api('/api/orders');
   const host = document.getElementById('ordersList');
-  const orders = res.orders || [];
-  if (!orders.length){
-    host.innerHTML = `<div class="empty">${ic('receipt')}<div>មិនទាន់មានការកម្ម៉ង់ណាមួយទេ</div></div>`;
+  ORDERS = res.orders || [];
+  if (!ORDERS.length){
+    host.innerHTML = `<div class="empty">${ic('receipt')}<div>${t('no_orders')}</div></div>`;
     renderIcons();
     return;
   }
-  host.innerHTML = orders.map(o => `
+  host.innerHTML = ORDERS.map(o => `
     <div class="order-row">
       <span class="ic ic-20" style="color:var(--gold);" data-icon="receipt-text"></span>
-      <div>
+      <div style="flex:1;">
         <div class="o-name">${escapeHtml(o.product)} ${o.qty>1?('× '+o.qty):''}</div>
         <div class="o-meta">${o.time}</div>
+        <span class="status-pill">${ic('check-circle')} ${t('status_completed')}</span>
       </div>
-      <div class="o-price num">${money(o.price)}</div>
+      <div style="text-align:right;">
+        <div class="o-price num">${money(o.price)}</div>
+        ${o.id ? `<button class="mini-view-btn" onclick="openOrderDetail('${o.id}')">${t('view_details')}</button>` : ''}
+      </div>
     </div>
   `).join('');
   renderIcons();
+}
+
+/* ---------------- order detail + review ---------------- */
+let currentOrderDetail = null;
+function openOrderDetail(orderId){
+  const o = ORDERS.find(x => x.id === orderId);
+  if (!o) return;
+  currentOrderDetail = o;
+  renderOrderDetail();
+  document.getElementById('sheetOverlay').classList.add('show');
+}
+function renderOrderDetail(){
+  const o = currentOrderDetail;
+  const items = o.items || [];
+  document.getElementById('sheetBody').innerHTML = `
+    <div class="s-name">${escapeHtml(o.product)} ${o.qty>1?('× '+o.qty):''}</div>
+    <div class="s-price num">${money(o.price)} · ${o.time}</div>
+    ${items.length ? `<div class="field"><label>${t('delivered_items')}</label><div class="accounts-box">${items.map((it,i)=>`<div>${i+1}. ${escapeHtml(it)}</div>`).join('')}</div></div>` : ''}
+    <div class="field" id="reviewSlot"></div>
+    <button class="primary-btn" onclick="closeSheet()">${ic('check')} ${t('close')}</button>
+  `;
+  renderReviewSlot();
+  renderIcons();
+}
+let reviewStars = 0;
+function renderReviewSlot(){
+  const o = currentOrderDetail;
+  const slot = document.getElementById('reviewSlot');
+  if (!slot || !o) return;
+  if (o.reviewed){
+    slot.innerHTML = `<div style="text-align:center;color:var(--success);font-size:12.5px;">${ic('check-circle')} ${t('already_rated')}</div>`;
+    renderIcons();
+    return;
+  }
+  reviewStars = 0;
+  slot.innerHTML = `
+    <label>${t('rate_product')}</label>
+    <div class="star-row" id="starRow">${[1,2,3,4,5].map(n=>`<span class="star-pick" data-n="${n}" onclick="pickStar(${n})">${ic('star')}</span>`).join('')}</div>
+    <textarea id="reviewComment" rows="2" placeholder="${t('review_ph')}" style="margin-top:8px;"></textarea>
+    <button class="primary-btn" onclick="submitReview()">${ic('send')} ${t('submit_review')}</button>
+  `;
+  renderIcons();
+}
+function pickStar(n){
+  reviewStars = n;
+  haptic('light');
+  document.querySelectorAll('#starRow .star-pick').forEach(el=>{
+    el.classList.toggle('active', Number(el.dataset.n) <= n);
+  });
+}
+async function submitReview(){
+  if (!reviewStars){ toast(t('pick_star_first'), 'circle-alert'); return; }
+  const commentEl = document.getElementById('reviewComment');
+  const comment = commentEl ? commentEl.value : '';
+  const res = await api('/api/review', {method:'POST', body: JSON.stringify({order_id: currentOrderDetail.id, rating: reviewStars, comment})});
+  if (res.ok){
+    toast(t('thanks_review'), 'check-circle');
+    haptic('success');
+    currentOrderDetail.reviewed = true;
+    const idx = ORDERS.findIndex(o => o.id === currentOrderDetail.id);
+    if (idx > -1) ORDERS[idx].reviewed = true;
+    renderReviewSlot();
+    loadProducts();
+  } else {
+    toast('មិនអាចដាក់ស្នើ review បានទេ', 'circle-alert');
+    haptic('error');
+  }
+}
+
+/* ---------------- promo banner ---------------- */
+async function loadPromo(){
+  const host = document.getElementById('promoBanner');
+  if (!host) return;
+  const res = await api('/api/promo');
+  const p = res.promo;
+  if (!p || !p.active || !p.title){ host.innerHTML = ''; return; }
+  host.innerHTML = `
+    <div class="promo-banner">
+      <span class="ic ic-24" data-icon="${p.icon || 'megaphone'}"></span>
+      <div><div class="promo-title">${escapeHtml(p.title)}</div>${p.subtitle ? `<div class="promo-sub">${escapeHtml(p.subtitle)}</div>` : ''}</div>
+    </div>
+  `;
+  renderIcons();
+}
+async function openPromoForm(){
+  const res = await api('/api/promo');
+  const p = res.promo || {};
+  document.getElementById('sheetBody').innerHTML = `
+    <div class="s-name">${ic('sparkles')} Promo Banner</div>
+    <div class="field"><label class="chk-label"><input type="checkbox" id="promoActive" ${p.active?'checked':''}> បើក Banner ក្នុងទំព័រទំនិញ</label></div>
+    <div class="field"><label>ចំណងជើង</label><input id="promoTitle" value="${escapeHtml(p.title||'')}" placeholder="ឧ. Flash Sale 20%!"></div>
+    <div class="field"><label>ពាក្យរណរង (ស្រេចចិត្ត)</label><input id="promoSubtitle" value="${escapeHtml(p.subtitle||'')}" placeholder="ព័ត៌មានបន្ថែម..."></div>
+    <button class="primary-btn" onclick="savePromo()">${ic('check-circle')} រក្សាទុក</button>
+  `;
+  renderIcons();
+  document.getElementById('sheetOverlay').classList.add('show');
+}
+async function savePromo(){
+  const active = document.getElementById('promoActive').checked;
+  const title = document.getElementById('promoTitle').value.trim();
+  const subtitle = document.getElementById('promoSubtitle').value.trim();
+  const res = await api('/api/admin/promo', {method:'POST', body: JSON.stringify({active, title, subtitle, icon:'megaphone'})});
+  if (res.ok){ toast('រក្សាទុក Promo Banner រួចរាល់', 'check-circle'); haptic('success'); closeSheet(); loadPromo(); }
+  else toast('មិនអាចរក្សាទុកបានទេ', 'circle-alert');
 }
 
 document.getElementById('searchInput').addEventListener('input', renderProductGrid);
@@ -1252,6 +1479,7 @@ async function sendBroadcast(){
 /* ---------------- boot ---------------- */
 renderIcons(); // static header/tabbar icons
 loadProducts();
+loadPromo();
 loadMe();
 // dev/preview fallback: Telegram often makes initials show as '?' outside the app;
 // this just leaves the avatar showing '?' gracefully until /api/me responds.
