@@ -121,6 +121,8 @@ STOCK_DIR = os.path.join(DATA_DIR, "stock")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 PRODUCTS_FILE = os.path.join(DATA_DIR, "products.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "orders.json")
+REVIEWS_FILE = os.path.join(DATA_DIR, "reviews.json")  # ការវាយតម្លៃ (rating/review) product តាម order
+PROMO_FILE = os.path.join(DATA_DIR, "promo.json")  # Promo banner ដែល admin កំណត់ ស្តែងក្នុងទំព័រទំនិញ Mini App
 EMOJI_FILE = os.path.join(DATA_DIR, "premium_emoji.json")
 SUBS_FILE = os.path.join(DATA_DIR, "subscriptions.json")
 # ករណីហាង/subscriber គ្មាន Bakong ID ផ្ទាល់ខ្លួន (គ្មាន CAMRAPIDPAY_API_KEY) — deposit នឹងប្រើ
@@ -578,6 +580,32 @@ def save_orders(d):
     _save(ORDERS_FILE, d)
 
 
+def load_reviews():
+    return _load(REVIEWS_FILE, [])
+
+
+def save_reviews(d):
+    _save(REVIEWS_FILE, d)
+
+
+def get_product_rating(key):
+    """គណនាមធ្យមភាគ rating (1-5) + ចំនួន review សម្រាប់ product មួយ។ ត្រូវប្រើសម្រាប់
+    បង្ហាញ ⭐ លើ product card និង Mini App product list។"""
+    reviews = [r for r in load_reviews() if r.get("product_key") == key]
+    if not reviews:
+        return {"avg": 0.0, "count": 0}
+    avg = sum(r.get("rating", 0) for r in reviews) / len(reviews)
+    return {"avg": round(avg, 1), "count": len(reviews)}
+
+
+def load_promo():
+    return _load(PROMO_FILE, {"active": False, "title": "", "subtitle": "", "icon": "megaphone"})
+
+
+def save_promo(d):
+    _save(PROMO_FILE, d)
+
+
 # ------------------------------------------------------------------
 # BOT SUBSCRIPTION (ការជាវ Bot ផ្ទាល់ខ្លួន) — manual admin approval flow
 # ------------------------------------------------------------------
@@ -873,6 +901,7 @@ def get_user(uid):
             "last_name": None,
             "username": None,
             "last_seen": None,
+            "lang": "km",          # ភាសា Mini App ដែល user ជ្រើសរើស (km/en) — ចងចាំក្នុង user profile
         }
         save_users(users)
     return users[uid]
@@ -890,6 +919,7 @@ def touch_user_profile(uid, first_name=None, last_name=None, username=None):
                 "balance": 0.0, "orders": 0, "referred_by": None, "ref_count": 0,
                 "ref_earned": 0.0, "joined_at": time.strftime("%Y-%m-%d"),
                 "first_name": None, "last_name": None, "username": None, "last_seen": None,
+                "lang": "km",
             }
         u = users[uid]
         if first_name is not None:
@@ -1509,6 +1539,7 @@ BTN_WALLET = "💰 Wallet"
 BTN_DEPOSIT = "➕ បញ្ចូលលុយ"
 BTN_ORDERS = "📦 ការកម្មង់"
 BTN_REFERRAL = "🔗 ណែនាំមិត្ត"
+BTN_PROFILE = "👤 ប្រវត្តិរូប"
 BTN_HELP = "☎️ ជួយខ្ញុំផង"
 BTN_SUBSCRIBE = "🤖 ជាវ Bot ផ្ទាល់ខ្លួន"
 
@@ -1525,32 +1556,39 @@ ADMIN_BTN_SUBPRICE = "💵 កែតម្លៃជួល Bot"
 ADMIN_BTN_SETQR = "🖼 កំណត់ QR ទូទាត់ដោយដៃ"
 
 
+def _miniapp_open_kb(view=None, label=None):
+    """សាងសង់ InlineKeyboardMarkup ១ប៊ូតុង បើក Mini App ត្រង់ tab ជាក់លាក់ (view) ។
+    សំខាន់៖ ត្រូវប្រើ InlineKeyboardButton (មិនមែន KeyboardButton ក្នុង reply keyboard ទេ) —
+    Telegram guarantee initData (profile/photo/name សម្រាប់ authenticate API) សម្រាប់តែ
+    Inline Keyboard Button និង Menu Button ប៉ុណ្ណោះ។ web_app button ក្នុង ReplyKeyboardMarkark
+    (custom keyboard) មិនត្រូវបានធានាថាបញ្ជូន initData ត្រឹមត្រូវទេ (Telegram រចនាវាសម្រាប់
+    flow sendData ម្យ៉ាងវិញទៀត) — នេះជាមូលហេតុពិតដែល user ចុចប៊ូតុង reply keyboard ចាស់ៗ
+    ហើយ Mini App បង្ហាញគ្មានរូប profile/សមតុល្យ/ទិន្នន័យអ្វីសោះ (loadMe() ទទួល invalid_init_data)។"""
+    if not MINIAPP_URL:
+        return None
+    sep = "&" if "?" in MINIAPP_URL else "?"
+    url = f"{MINIAPP_URL}{sep}view={view}" if view else MINIAPP_URL
+    kb = types.InlineKeyboardMarkup()
+    try:
+        kb.add(types.InlineKeyboardButton(label or f"🛍 បើក {STORE_NAME}", web_app=types.WebAppInfo(url=url)))
+    except Exception as e:
+        print(f"[_miniapp_open_kb] web_app inline button failed ({e}) -> plain url fallback", flush=True)
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton(label or f"🛍 បើក {STORE_NAME}", url=MINIAPP_URL))
+    return kb
+
+
 def miniapp_reply_kb():
-    """ប៊ូតុងច្រើនក្នុង reply keyboard (ទិញ, Wallet, ការកម្មង់, ប្រវត្តិរូប) ដែលនីមួយៗជា
-    web_app button ចង្អុលទៅ Mini App (miniapp.html) ដដែល — គ្រាន់តែបន្ថែម ?view=xxx ដើម្បី
-    ចូលត្រង់ tab ត្រឹមត្រូវភ្លាមៗ។ ព្រោះជា web_app button ដូចគ្នា ចុចប៊ូតុងណាក៏ដោយ Telegram
-    ផ្ញើ initData (profile/name/photo) ចូល Mini App ដូចគ្នាទាំងអស់ — ចុចប៊ូតុងណាក៏ទទួលបាន
-    data ដូចគ្នា (មិនមែនមានតែប៊ូតុងខៀវតែមួយទើបទាញ data បានទេ)។ admin panel នៅតែបង្ហាញ
-    ស្វ័យប្រវត្តិក្នុង Mini App សម្រាប់ admin ដោយផ្អែកលើ is_admin ពី /api/me។"""
+    """ប៊ូតុងច្រើនក្នុង reply keyboard (ទិញ, Wallet, ការកម្មង់, ណែនាំមិត្ត, ប្រវត្តិរូប) — ដាក់ជា
+    ប៊ូតុងអត្ថបទធម្មតា (មិនមែន web_app) ដោយចេតនា។ ចុចហើយនឹងបញ្ជូនសារអត្ថបទទៅ handler
+    ខាងក្រោម (reply_shop/reply_wallet/...) ដែលឆ្លើយតបព្រមទាំងភ្ជាប់ inline button
+    "🛍 បើក Mini App" ម្តងទៀត (_miniapp_open_kb) — ធានាថា Mini App ទទួលបាន initData
+    ត្រឹមត្រូវជានិច្ច (មិនដូច web_app button ដាក់ផ្ទាល់ក្នុង ReplyKeyboardMarkup ដែល Telegram
+    មិនធានាបញ្ជូន initData ត្រឹមត្រូវនោះទេ — សូមមើលចំណាំក្នុង _miniapp_open_kb())។"""
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    added = False
-    if MINIAPP_URL:
-        sep = "&" if "?" in MINIAPP_URL else "?"
-
-        def _wa_btn(label, view):
-            return types.KeyboardButton(label, web_app=types.WebAppInfo(url=f"{MINIAPP_URL}{sep}view={view}"))
-
-        try:
-            kb.add(_wa_btn(f"🛍 {STORE_NAME}", "shop"))
-            kb.add(_wa_btn(BTN_WALLET, "wallet"), _wa_btn(BTN_ORDERS, "orders"))
-            kb.add(_wa_btn(BTN_REFERRAL, "profile"), _wa_btn("👤 ប្រវត្តិរូប", "profile"))
-            added = True
-        except Exception as e:
-            # library ចាស់មិនស្គាល់ web_app ទេ ឬ URL មិនត្រឹមត្រូវ — កុំឲ្យ /start ដួល
-            print(f"[miniapp_reply_kb] web_app button failed ({e}) -> fallback", flush=True)
-    if not added:
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        kb.add(preply_btn(BTN_HELP, style="primary"))
+    kb.add(BTN_SHOP)
+    kb.add(BTN_WALLET, BTN_ORDERS)
+    kb.add(BTN_REFERRAL, BTN_PROFILE)
     return kb
 
 
@@ -1666,7 +1704,13 @@ def cmd_orders(message):
 # ------------------------------------------------------------------
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_SHOP))
 def reply_shop(message):
-    bot.send_message(message.chat.id, "🛒 ជ្រើសរើស account ដែលអ្នកចង់ទិញ:", reply_markup=products_kb())
+    bot.send_message(
+        message.chat.id, "🛒 ជ្រើសរើស account ដែលអ្នកចង់ទិញ (ឬបើក Mini App ដើម្បីទិញ+មើលរូបភាព):",
+        reply_markup=products_kb(),
+    )
+    kb = _miniapp_open_kb("shop", f"🛍 បើក {STORE_NAME}")
+    if kb:
+        bot.send_message(message.chat.id, "👇 ឬចុចទីនេះ", reply_markup=kb)
 
 
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_WALLET))
@@ -1675,6 +1719,7 @@ def reply_wallet(message):
     bot.send_message(
         message.chat.id,
         f"💰 សមតុល្យបច្ចុប្បន្ន: <b>${u['balance']:.2f}</b>\nការកម្មង់សរុប: {u['orders']}",
+        reply_markup=_miniapp_open_kb("wallet", "💰 បើក Wallet ក្នុង Mini App"),
     )
 
 
@@ -1688,10 +1733,13 @@ def reply_orders(message):
     orders = load_orders()
     mine = [o for o in orders if o["uid"] == message.from_user.id]
     if not mine:
-        bot.send_message(message.chat.id, "អ្នកមិនទាន់មានការកម្មង់ណាមួយទេ។")
+        bot.send_message(message.chat.id, "អ្នកមិនទាន់មានការកម្មង់ណាមួយទេ។", reply_markup=_miniapp_open_kb("orders", "📦 បើក Mini App"))
         return
     lines = [f"• {o['product']} - ${o['price']:.2f} - {o['time']}" for o in mine[-10:]]
-    bot.send_message(message.chat.id, "📦 ការកម្មង់ចុងក្រោយ:\n" + "\n".join(lines))
+    bot.send_message(
+        message.chat.id, "📦 ការកម្មង់ចុងក្រោយ:\n" + "\n".join(lines),
+        reply_markup=_miniapp_open_kb("orders", "📦 មើលលម្អិត + Review ក្នុង Mini App"),
+    )
 
 
 def referral_info_text(uid):
@@ -1710,7 +1758,21 @@ def referral_info_text(uid):
 
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_REFERRAL))
 def reply_referral(message):
-    bot.send_message(message.chat.id, referral_info_text(message.from_user.id))
+    bot.send_message(
+        message.chat.id, referral_info_text(message.from_user.id),
+        reply_markup=_miniapp_open_kb("profile", "🔗 មើល/ចែករំលែកតំណ ក្នុង Mini App"),
+    )
+
+
+@bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_PROFILE))
+def reply_profile(message):
+    u = get_user(message.from_user.id)
+    bot.send_message(
+        message.chat.id,
+        f"👤 <b>ប្រវត្តិរូបរបស់អ្នក</b>\nID: <code>{message.from_user.id}</code>\n"
+        f"💰 សមតុល្យ: ${u.get('balance', 0.0):.2f}\nការកម្មង់: {u.get('orders', 0)}",
+        reply_markup=_miniapp_open_kb("profile", "👤 បើកប្រវត្តិរូបក្នុង Mini App"),
+    )
 
 
 def subscribe_intro_text():
@@ -3808,6 +3870,7 @@ def api_product_list():
     products = load_products()
     out = []
     for key, p in products.items():
+        rating = get_product_rating(key)
         out.append({
             "key": key,
             "name": p.get("name", key),
@@ -3816,6 +3879,8 @@ def api_product_list():
             "image": p.get("image") or None,
             "stock": stock_count(key),
             "sold": p.get("sold", 0),
+            "rating": rating["avg"],
+            "rating_count": rating["count"],
         })
     return out
 
@@ -3845,13 +3910,19 @@ def api_perform_purchase(uid, product_key, qty=1):
         return {"ok": False, "error": "out_of_stock_race"}
 
     new_balance = update_balance(uid, -total_price)
+    order_id = uuid.uuid4().hex[:10]
     orders = load_orders()
     orders.append({
+        "id": order_id,
         "uid": uid,
         "product": product["name"],
+        "product_key": product_key,
         "price": total_price,
         "qty": qty,
         "time": time.strftime("%Y-%m-%d %H:%M"),
+        "status": "completed",  # ការទិញ deliver ស្វ័យប្រវត្តិភ្លាមៗ (stock digital) — status ត្រូវបានតម្កល់
+        "items": items,         # ធាតុ account ដែលបានប្រគល់ជូន — ប្រើសម្រាប់ Mini App បង្ហាញឡើងវិញក្នុង "មើលលម្អិត"
+        "reviewed": False,
     })
     save_orders(orders)
 
@@ -3896,7 +3967,7 @@ def api_perform_purchase(uid, product_key, qty=1):
             except Exception as e:
                 print(f"[broadcast_low_stock] failed: {e}", flush=True)
 
-    return {"ok": True, "items": items, "total": total_price, "balance": new_balance}
+    return {"ok": True, "items": items, "total": total_price, "balance": new_balance, "order_id": order_id}
 
 
 def api_create_deposit(uid, amount):
@@ -4071,6 +4142,15 @@ def start_keep_alive():
         uid, err = _require_uid()
         if err:
             return err
+        if flask_request.method == "POST":
+            body = flask_request.get_json(silent=True) or {}
+            lang = body.get("lang")
+            if lang in ("km", "en"):
+                with _lock:
+                    users = load_users()
+                    if str(uid) in users:
+                        users[str(uid)]["lang"] = lang
+                        save_users(users)
         u = get_user(uid)
         tg_user = _verify_webapp_init_data(_get_init_data()) or {}
         if tg_user:
@@ -4096,6 +4176,7 @@ def start_keep_alive():
             "username": tg_user.get("username") or u.get("username"),
             "photo_url": tg_user.get("photo_url"),
             "joined_at": u.get("joined_at"),
+            "lang": u.get("lang", "km"),
         })
 
     # ---------------- ADMIN: product & stock management ----------------
@@ -4361,7 +4442,97 @@ def start_keep_alive():
         if err:
             return err
         orders = [o for o in load_orders() if str(o.get("uid")) == str(uid)]
-        return jsonify({"ok": True, "orders": orders[-50:][::-1]})
+        out = []
+        # orders ចាស់ៗ (មុននឹងបន្ថែម order tracking) អាចគ្មាន id/status/items/reviewed —
+        # ដាក់ default ត្រង់នេះ ដើម្បីកុំឲ្យ Mini App ត្រូវការគ្រប់ order ថ្មីៗតែប៉ុណ្ណោះ
+        for o in orders[-50:][::-1]:
+            out.append({
+                **o,
+                "status": o.get("status", "completed"),
+                "reviewed": o.get("reviewed", False),
+            })
+        return jsonify({"ok": True, "orders": out})
+
+    @app.route("/api/review", methods=["POST", "OPTIONS"])
+    def api_review_route():
+        """User វាយតម្លៃ (1-5 ⭐ + comment ស្រេចចិត្ត) product ដែលខ្លួនបានទិញរួច — ត្រូវការ
+        order_id ត្រឹមត្រូវជាកម្មសិទ្ធិ user នេះ ហើយមិនទាន់ធ្លាប់ review ពី order នេះមកមុន។"""
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_uid()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        order_id = (body.get("order_id") or "").strip()
+        try:
+            rating = int(body.get("rating"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_rating"}), 400
+        if rating < 1 or rating > 5:
+            return jsonify({"ok": False, "error": "invalid_rating"}), 400
+        comment = (body.get("comment") or "").strip()[:300]
+        if not order_id:
+            return jsonify({"ok": False, "error": "missing_order_id"}), 400
+        with _lock:
+            orders = load_orders()
+            order = next((o for o in orders if o.get("id") == order_id and str(o.get("uid")) == str(uid)), None)
+            if not order:
+                return jsonify({"ok": False, "error": "order_not_found"}), 404
+            if order.get("reviewed"):
+                return jsonify({"ok": False, "error": "already_reviewed"}), 400
+            reviews = load_reviews()
+            reviews.append({
+                "id": uuid.uuid4().hex[:10],
+                "order_id": order_id,
+                "product_key": order.get("product_key"),
+                "uid": uid,
+                "rating": rating,
+                "comment": comment,
+                "time": time.strftime("%Y-%m-%d %H:%M"),
+            })
+            save_reviews(reviews)
+            for o in orders:
+                if o.get("id") == order_id:
+                    o["reviewed"] = True
+            save_orders(orders)
+        return jsonify({"ok": True})
+
+    @app.route("/api/reviews", methods=["GET"])
+    def api_reviews_route():
+        """Review សាធារណៈសម្រាប់ product មួយ (មិនតម្រូវ init_data — ត្រូវការតែសម្រាប់អានមើល)"""
+        key = flask_request.args.get("product_key", "")
+        reviews = [r for r in load_reviews() if r.get("product_key") == key]
+        reviews.sort(key=lambda r: r.get("time", ""), reverse=True)
+        users = load_users()
+        out = []
+        for r in reviews[:30]:
+            u = users.get(str(r.get("uid")), {})
+            name = " ".join([p for p in [u.get("first_name"), u.get("last_name")] if p]).strip() or "Kairozen User"
+            out.append({"rating": r.get("rating", 0), "comment": r.get("comment", ""), "time": r.get("time"), "name": name})
+        rating = get_product_rating(key)
+        return jsonify({"ok": True, "reviews": out, "avg": rating["avg"], "count": rating["count"]})
+
+    @app.route("/api/promo", methods=["GET"])
+    def api_promo_route():
+        """Promo banner សាធារណៈ (បង្ហាញលើកំពូលទំព័រទំនិញ) — មិនតម្រូវ init_data"""
+        return jsonify({"ok": True, "promo": load_promo()})
+
+    @app.route("/api/admin/promo", methods=["POST", "OPTIONS"])
+    def api_admin_promo_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_admin()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        promo = {
+            "active": bool(body.get("active")),
+            "title": (body.get("title") or "").strip()[:80],
+            "subtitle": (body.get("subtitle") or "").strip()[:140],
+            "icon": (body.get("icon") or "megaphone").strip() or "megaphone",
+        }
+        save_promo(promo)
+        return jsonify({"ok": True, "promo": promo})
 
     @app.route("/api/order", methods=["POST", "OPTIONS"])
     def api_order_route():
