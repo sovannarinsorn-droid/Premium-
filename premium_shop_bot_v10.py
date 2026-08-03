@@ -965,6 +965,25 @@ def update_balance(uid, delta):
         return users[uid]["balance"]
 
 
+def try_deduct_balance(uid, amount):
+    """ដកលុយចេញពី wallet ស្វ័យប្រវត្តិ + ត្រួតពិនិត្យសមតុល្យ ក្នុង lock តែមួយ (atomic
+    check-and-deduct) — ការពារ race condition ពេល request ២ មកដំណាលគ្នា (ឧ. user ចុច
+    ប៊ូតុងទិញលឿនៗ ២ដង ឬ script បង្កើត request ស្របគ្នា) ដែលអាចធ្វើឲ្យ balance ចូល
+    អវិជ្ជមាន (double-spend)។ Return (True, new_balance) បើជោគជ័យ, ឬ
+    (False, current_balance) បើលុយមិនគ្រប់។"""
+    with _lock:
+        users = load_users()
+        uid = str(uid)
+        if uid not in users:
+            users[uid] = {"balance": 0.0, "orders": 0}
+        current = users[uid]["balance"]
+        if current < amount:
+            return False, current
+        users[uid]["balance"] = round(current - amount, 2)
+        save_users(users)
+        return True, users[uid]["balance"]
+
+
 def stock_path(product_key):
     return os.path.join(STOCK_DIR, f"{product_key}.txt")
 
@@ -2842,7 +2861,13 @@ def handle_buy_wallet(call, product_key, qty=1):
         bot.answer_callback_query(call.id, "❌ ស្តុកអស់ភ្លាមៗ សូមព្យាយាមម្តងទៀត", show_alert=True)
         return
 
-    update_balance(uid, -total_price)
+    # atomic check-and-deduct — ការពារ double-spend បើ user ចុចទិញលឿនៗច្រើនដង
+    deducted, _new_balance = try_deduct_balance(uid, total_price)
+    if not deducted:
+        push_stock_items(product_key, items)  # ដាក់ stock ត្រឡប់វិញ លុយមិនគ្រប់ (race condition)
+        bot.answer_callback_query(call.id, "❌ សមតុល្យមិនគ្រប់គ្រាន់ សូម /deposit មុន", show_alert=True)
+        return
+
     orders = load_orders()
     orders.append({
         "uid": uid,
@@ -3909,7 +3934,12 @@ def api_perform_purchase(uid, product_key, qty=1):
         push_stock_items(product_key, items)  # ដាក់ត្រឡប់វិញ បើយកមិនគ្រប់ (race condition)
         return {"ok": False, "error": "out_of_stock_race"}
 
-    new_balance = update_balance(uid, -total_price)
+    # atomic check-and-deduct — ការពារ double-spend បើ request ២ មកដំណាលគ្នា
+    # (balance check ខាងលើគ្រាន់តែជា early-exit, ចំណុចពិតត្រូវសម្រេចត្រង់នេះ ក្នុង lock ជាមួយគ្នា)
+    deducted, new_balance = try_deduct_balance(uid, total_price)
+    if not deducted:
+        push_stock_items(product_key, items)  # ដាក់ stock ត្រឡប់វិញ លុយមិនគ្រប់ (race condition)
+        return {"ok": False, "error": "insufficient_balance", "balance": new_balance, "required": total_price}
     order_id = uuid.uuid4().hex[:10]
     orders = load_orders()
     orders.append({
