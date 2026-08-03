@@ -562,6 +562,11 @@
           <span data-i18n="invite_friend">ណែនាំមិត្តភក្តិ</span>
           <span class="ic ic-18 chev" data-icon="chevron-right"></span>
         </div>
+        <div class="list-row" id="subListRow" onclick="goto('sub')" style="display:none;">
+          <span class="ic ic-20" data-icon="bot"></span>
+          <span>🤖 ជាវ Bot ផ្ទាល់ខ្លួន</span>
+          <span class="ic ic-18 chev" data-icon="chevron-right"></span>
+        </div>
         <div class="list-row" onclick="toggleLang()">
           <span class="ic ic-20" data-icon="languages"></span>
           <span data-i18n="language">ភាសា / Language</span>
@@ -572,10 +577,19 @@
       <div class="app-foot">Kairozen Store · v1.0</div>
     </section>
 
+    <section class="view" id="view-sub">
+      <div class="section-title" style="display:flex; align-items:center; gap:8px;">
+        <span class="ic ic-20" style="cursor:pointer;" onclick="goto('profile')" data-icon="arrow-left"></span>
+        <span>🤖 ជាវ Bot ផ្ទាល់ខ្លួន</span>
+      </div>
+      <div id="subBody"></div>
+    </section>
+
     <section class="view" id="view-admin">
       <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
         <span>ផ្ទាំងគ្រប់គ្រង</span>
         <div style="display:flex; gap:8px;">
+          <button class="icon-btn accent" onclick="openSubGrantForm()" title="ជាវ Bot ឥតគិតថ្លៃ" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="gift"></span></button>
           <button class="icon-btn accent" onclick="openPromoForm()" title="Promo Banner" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="sparkles"></span></button>
           <button class="icon-btn accent" onclick="openBroadcastForm()" title="ផ្ញើសារទៅគ្រប់គ្នា" style="width:30px;height:30px;"><span class="ic ic-18" data-icon="megaphone"></span></button>
         </div>
@@ -739,6 +753,7 @@ function toggleLang(){
 /* ---------------- navigation ---------------- */
 function goto(view){
   haptic('light');
+  if (view !== 'sub') stopSubPoll();
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+view).classList.add('active');
   document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('active', b.dataset.view===view));
@@ -747,6 +762,7 @@ function goto(view){
   if (view === 'orders') { loadMe(); loadOrders(); }
   if (view === 'admin') { if (currentAdminSeg === 'users') loadAdminUsers(); else loadAdminProducts(); }
   if (view === 'profile') loadMe().then(renderProfile);
+  if (view === 'sub') loadSubStatus();
   document.getElementById('adminFab').style.display = (view === 'admin' && IS_ADMIN && currentAdminSeg === 'products') ? 'flex' : 'none';
 }
 
@@ -822,7 +838,7 @@ function renderBuySheet(){
       <button onclick="stepQty(1)">${ic('plus')}</button>
     </div>
     <div style="text-align:center;color:var(--ink-dim);font-size:12.5px;margin-bottom:6px;">សរុប: <span class="num" style="color:var(--gold);font-weight:700;">${money(p.price*buyQty)}</span> · ស្តុកមាន ${p.stock}</div>
-    <button class="primary-btn" id="confirmBuyBtn" onclick="confirmBuy()">${ic('check-circle')} បញ្ជាក់ការទិញ</button>
+    <button class="primary-btn" onclick="confirmBuy()">${ic('check-circle')} បញ្ជាក់ការទិញ</button>
   `;
   renderIcons();
 }
@@ -833,18 +849,8 @@ function stepQty(d){
   buyQty = next;
   renderBuySheet();
 }
-let buyInFlight = false;
 async function confirmBuy(){
-  if (buyInFlight) return;  // ការពារ user ចុចលឿនៗច្រើនដងកុំឲ្យបញ្ជូន request ស្ទួន
-  buyInFlight = true;
-  const btn = document.getElementById('confirmBuyBtn');
-  if (btn) btn.disabled = true;
-  let res;
-  try {
-    res = await api('/api/order', {method:'POST', body: JSON.stringify({product_key: buyProduct.key, qty: buyQty})});
-  } finally {
-    buyInFlight = false;
-  }
+  const res = await api('/api/order', {method:'POST', body: JSON.stringify({product_key: buyProduct.key, qty: buyQty})});
   if (res.ok){
     document.getElementById('sheetBody').innerHTML = `
       <div class="icon-tile" style="width:56px;height:56px;font-size:26px;color:var(--success);">${ic('check-circle-2')}</div>
@@ -862,7 +868,6 @@ async function confirmBuy(){
     toast(errMap[res.error] || 'មានបញ្ហា សូមព្យាយាមម្តងទៀត', 'circle-alert');
     haptic('error');
     if (res.error === 'insufficient_balance'){ closeSheet(); goto('wallet'); }
-    else if (btn) btn.disabled = false;  // ឲ្យ user ព្យាយាមទិញម្តងទៀតបាន (ក្រៅពី insufficient_balance ដែល sheet បិទរួច)
   }
 }
 
@@ -1157,6 +1162,168 @@ async function savePromo(){
   const res = await api('/api/admin/promo', {method:'POST', body: JSON.stringify({active, title, subtitle, icon:'megaphone'})});
   if (res.ok){ toast('រក្សាទុក Promo Banner រួចរាល់', 'check-circle'); haptic('success'); closeSheet(); loadPromo(); }
   else toast('មិនអាចរក្សាទុកបានទេ', 'circle-alert');
+}
+
+/* ---------------- subscribe bot (rent your own bot instance) ---------------- */
+let subPollTimer = null;
+let subRentalPerDay = 0;
+function stopSubPoll(){ if (subPollTimer){ clearInterval(subPollTimer); subPollTimer = null; } }
+async function checkSubAvailability(){
+  const res = await api('/api/sub/status');
+  const row = document.getElementById('subListRow');
+  if (row) row.style.display = (res.ok && !res.is_subscriber_bot) ? 'flex' : 'none';
+}
+async function loadSubStatus(){
+  stopSubPoll();
+  const host = document.getElementById('subBody');
+  host.innerHTML = skeletonRows(2);
+  const res = await api('/api/sub/status');
+  if (!res.ok || res.is_subscriber_bot){
+    host.innerHTML = `<div class="empty">${ic('ban')}<div>លក្ខណៈពិសេសនេះមិនអាចប្រើបានលើ Bot នេះទេ</div></div>`;
+    renderIcons();
+    return;
+  }
+  subRentalPerDay = res.rental_per_day || 0;
+  renderSub(res.sub);
+}
+function renderSub(sub){
+  const host = document.getElementById('subBody');
+  const status = sub && sub.status;
+  if (!sub || !status || status === 'collecting_store_name' || !sub.bot_token_masked){
+    host.innerHTML = `
+      <p style="font-size:13px; color:var(--ink-dim); line-height:1.6; margin:4px 0 14px;">
+        ជួល Bot ហាងផ្ទាល់ខ្លួនរបស់អ្នក ដំណើរការស្វ័យប្រវត្តិលើ server ដូចគ្នា — គ្រាន់តែផ្តល់
+        Bot Token ពី @BotFather + ឈ្មោះហាង។ តម្លៃជួល <b>$${subRentalPerDay.toFixed(2)}/ថ្ងៃ</b>។
+      </p>
+      <div class="field"><label>Bot Token (ពី @BotFather)</label><input id="subToken" placeholder="123456789:AA..."></div>
+      <div class="field"><label>ឈ្មោះហាង</label><input id="subStoreName" placeholder="ឧ. Dara Store" maxlength="40"></div>
+      <div class="field"><label>Bakong ID ផ្ទាល់ខ្លួន (ស្រេចចិត្ត)</label><input id="subBakongId" placeholder="ទុកទទេបើគ្មាន"></div>
+      <button class="primary-btn" onclick="submitSubStart()">${ic('send')} បន្ត</button>
+    `;
+    renderIcons();
+    return;
+  }
+  if (status === 'collecting_days'){
+    host.innerHTML = `
+      <div class="s-name">🏪 ${escapeHtml(sub.store_name||'')}</div>
+      <div class="field"><label>ចំនួនថ្ងៃដែលចង់ជួល (${subRentalPerDay.toFixed(2)}$/ថ្ងៃ)</label>
+        <input id="subDays" type="number" inputmode="numeric" placeholder="ឧ. 30" oninput="updateSubTotal()"></div>
+      <div id="subTotalLine" style="font-size:13px; color:var(--gold); font-weight:700; margin:-4px 0 12px;"></div>
+      <button class="primary-btn" onclick="submitSubPay()">${ic('qr-code')} បង្កើត QR ទូទាត់</button>
+    `;
+    return;
+  }
+  if (status === 'waiting_payment'){
+    host.innerHTML = `
+      <div class="s-name">🏪 ${escapeHtml(sub.store_name||'')}</div>
+      <div class="s-price num">$${(sub.amount_paid||0).toFixed(2)} · ${sub.rental_days} ថ្ងៃ</div>
+      <img src="${sub.dep_id ? '/api/qr/'+sub.dep_id+'.png' : ''}" style="width:100%; border-radius:14px; margin:10px 0;">
+      <p style="font-size:12.5px; color:var(--ink-dim); text-align:center;">📱 Scan ទូទាត់ — ប្រព័ន្ធនឹង detect ស្វ័យប្រវត្តិ</p>
+      <button class="mini-view-btn" style="width:100%; margin-top:6px;" onclick="loadSubStatus()">${ic('refresh-cw')} ត្រួតពិនិត្យឡើងវិញ</button>
+    `;
+    renderIcons();
+    subPollTimer = setInterval(async () => {
+      const r = await api('/api/sub/check');
+      if (r.ok && r.status && r.status !== 'waiting_payment'){ stopSubPoll(); loadSubStatus(); }
+    }, 6000);
+    return;
+  }
+  if (status === 'waiting_admin_deploy' || status === 'waiting_receipt' || status === 'waiting_admin_review'){
+    host.innerHTML = `<div class="empty">${ic('clock')}<div>⏳ សូមរង់ចាំ Admin ដាក់ Bot ឲ្យអ្នកដំណើរការ — bot នឹងជូនដំណឹងភ្លាមៗពេលរួចរាល់</div></div>`;
+    renderIcons();
+    return;
+  }
+  if (status === 'active' || status === 'expired'){
+    const isActive = status === 'active';
+    host.innerHTML = `
+      <div class="empty" style="padding-bottom:6px;">
+        ${ic(isActive ? 'check-circle' : 'clock')}
+        <div>${isActive ? '✅ Bot កំពុងដំណើរការ' : '⏰ ការជួលបានផុតកំណត់'}</div>
+      </div>
+      <div class="s-name" style="text-align:center;">🏪 ${escapeHtml(sub.store_name||'')}</div>
+      ${sub.expires_at_text ? `<div class="o-meta" style="text-align:center;">ផុតកំណត់៖ ${sub.expires_at_text}</div>` : ''}
+      <div class="field"><label>ជួលបន្ថែម (ថ្ងៃ)</label><input id="subDays" type="number" inputmode="numeric" placeholder="ឧ. 30" oninput="updateSubTotal()"></div>
+      <div id="subTotalLine" style="font-size:13px; color:var(--gold); font-weight:700; margin:-4px 0 12px;"></div>
+      <button class="primary-btn" onclick="submitSubPay()">${ic('qr-code')} បង្កើត QR ទូទាត់</button>
+    `;
+    renderIcons();
+    return;
+  }
+  host.innerHTML = `<div class="empty">${ic('info')}<div>សូមបន្តជំហានក្នុង chat ជាមួយ Bot ដោយផ្ទាល់</div></div>`;
+  renderIcons();
+}
+function updateSubTotal(){
+  const el = document.getElementById('subDays');
+  const line = document.getElementById('subTotalLine');
+  const days = parseInt(el.value, 10);
+  line.textContent = (days > 0) ? `សរុប៖ $${(days * subRentalPerDay).toFixed(2)}` : '';
+}
+async function submitSubStart(){
+  const bot_token = document.getElementById('subToken').value.trim();
+  const store_name = document.getElementById('subStoreName').value.trim();
+  const bakong_id = document.getElementById('subBakongId').value.trim();
+  if (!bot_token || !store_name){ toast('សូមបំពេញ Bot Token និងឈ្មោះហាង', 'circle-alert'); return; }
+  const res = await api('/api/sub/start', {method:'POST', body: JSON.stringify({bot_token, store_name, bakong_id})});
+  if (res.ok){ haptic('success'); loadSubStatus(); }
+  else toast(res.error === 'invalid_token' ? 'Bot Token មិនត្រឹមត្រូវទេ' : 'មិនអាចបន្តបានទេ', 'circle-alert');
+}
+async function submitSubPay(){
+  const days = parseInt((document.getElementById('subDays')||{}).value, 10);
+  if (!days || days <= 0){ toast('សូមបញ្ចូលចំនួនថ្ងៃត្រឹមត្រូវ', 'circle-alert'); return; }
+  const res = await api('/api/sub/pay', {method:'POST', body: JSON.stringify({days})});
+  if (res.ok){ haptic('success'); loadSubStatus(); }
+  else toast('មិនអាចបង្កើត QR បានទេ សូមព្យាយាមម្តងទៀត', 'circle-alert');
+}
+
+/* ---------------- admin: free-grant bot subscription ---------------- */
+function openSubGrantForm(){
+  document.getElementById('sheetBody').innerHTML = `
+    <div class="s-name">${ic('gift')} ជាវ Bot ឥតគិតថ្លៃ (Admin Grant)</div>
+    <p style="font-size:12px; color:var(--ink-dim); margin:-6px 0 4px;">ដាក់ Bot ជូន user ណាមួយភ្លាមៗ ដោយមិនគិតលុយ</p>
+    <div class="field"><label>Telegram User ID</label><input id="grantUid" type="number" inputmode="numeric" placeholder="ឧ. 123456789"></div>
+    <div class="field"><label>Bot Token (ពី @BotFather)</label><input id="grantToken" placeholder="123456789:AA..."></div>
+    <div class="field"><label>ឈ្មោះហាង</label><input id="grantStoreName" placeholder="ឧ. Dara Store" maxlength="40"></div>
+    <div class="field">
+      <label>តើ user នេះមាន Bakong ID ផ្ទាល់ខ្លួនទេ?</label>
+      <div class="chip-row" style="margin-top:2px;">
+        <div class="amt-chip grant-bakong-choice active" data-v="no" onclick="setGrantBakongChoice('no')">អត់មាន (ជួលគិតជាថ្ងៃ)</div>
+        <div class="amt-chip grant-bakong-choice" data-v="yes" onclick="setGrantBakongChoice('yes')">មាន Bakong ID</div>
+      </div>
+    </div>
+    <div id="grantNoBakongFields" class="field"><label>ចំនួនថ្ងៃ (ទុកទទេ = គ្មានកំណត់)</label><input id="grantDays" type="number" inputmode="numeric" placeholder="ស្រេចចិត្ត"></div>
+    <div id="grantBakongFields" style="display:none;">
+      <div class="field"><label>Bakong ID ផ្ទាល់ខ្លួន</label><input id="grantBakongId" placeholder="ឧ. dara_store@aclb"></div>
+      <div class="field"><label>CamRapidPay API Key ផ្ទាល់ខ្លួន</label><input id="grantApiKey" placeholder="សម្រាប់ Bakong auto-payment"></div>
+    </div>
+    <button class="primary-btn" onclick="submitSubGrant()">${ic('check-circle')} ដាក់ Bot ជូនភ្លាមៗ</button>
+  `;
+  renderIcons();
+  document.getElementById('sheetOverlay').classList.add('show');
+}
+function setGrantBakongChoice(v){
+  document.querySelectorAll('.grant-bakong-choice').forEach(el => el.classList.toggle('active', el.dataset.v === v));
+  document.getElementById('grantNoBakongFields').style.display = v === 'no' ? 'block' : 'none';
+  document.getElementById('grantBakongFields').style.display = v === 'yes' ? 'block' : 'none';
+}
+async function submitSubGrant(){
+  const target_uid = document.getElementById('grantUid').value.trim();
+  const bot_token = document.getElementById('grantToken').value.trim();
+  const store_name = document.getElementById('grantStoreName').value.trim();
+  const hasBakong = document.querySelector('.grant-bakong-choice[data-v="yes"]').classList.contains('active');
+  const rental_days = hasBakong ? null : (document.getElementById('grantDays').value.trim() || null);
+  const bakong_id = hasBakong ? document.getElementById('grantBakongId').value.trim() : null;
+  const camrapidpay_api_key = hasBakong ? document.getElementById('grantApiKey').value.trim() : null;
+  if (!target_uid || !bot_token || !store_name){ toast('សូមបំពេញ User ID, Token និងឈ្មោះហាង', 'circle-alert'); return; }
+  if (hasBakong && (!bakong_id || !camrapidpay_api_key)){ toast('សូមបំពេញ Bakong ID និង API Key', 'circle-alert'); return; }
+  const res = await api('/api/admin/sub/grant', {method:'POST', body: JSON.stringify({target_uid, bot_token, store_name, rental_days, bakong_id, camrapidpay_api_key})});
+  if (res.ok){
+    toast('✅ Bot ដំណើរការជូន user រួចរាល់!', 'check-circle');
+    haptic('success');
+    closeSheet();
+  } else {
+    const msgs = {invalid_token:'Bot Token មិនត្រឹមត្រូវ', invalid_uid:'User ID មិនត្រឹមត្រូវ', invalid_store_name:'ឈ្មោះហាងមិនត្រឹមត្រូវ', deploy_failed:'Deploy បរាជ័យ: '+(res.detail||'')};
+    toast(msgs[res.error] || 'មិនអាចដាក់ Bot បានទេ', 'circle-alert');
+  }
 }
 
 document.getElementById('searchInput').addEventListener('input', renderProductGrid);
@@ -1492,6 +1659,7 @@ renderIcons(); // static header/tabbar icons
 loadProducts();
 loadPromo();
 loadMe();
+checkSubAvailability();
 // dev/preview fallback: Telegram often makes initials show as '?' outside the app;
 // this just leaves the avatar showing '?' gracefully until /api/me responds.
 
@@ -1500,7 +1668,7 @@ loadMe();
 // the same profile/data as the main blue button (via initData -> /api/me above).
 (function openInitialView(){
   const v = new URLSearchParams(location.search).get('view');
-  const valid = ['shop','wallet','orders','profile','admin'];
+  const valid = ['shop','wallet','orders','profile','admin','sub'];
   if (v && valid.includes(v)) goto(v);
 })();
 </script>
