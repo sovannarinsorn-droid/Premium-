@@ -965,25 +965,6 @@ def update_balance(uid, delta):
         return users[uid]["balance"]
 
 
-def try_deduct_balance(uid, amount):
-    """ដកលុយចេញពី wallet ស្វ័យប្រវត្តិ + ត្រួតពិនិត្យសមតុល្យ ក្នុង lock តែមួយ (atomic
-    check-and-deduct) — ការពារ race condition ពេល request ២ មកដំណាលគ្នា (ឧ. user ចុច
-    ប៊ូតុងទិញលឿនៗ ២ដង ឬ script បង្កើត request ស្របគ្នា) ដែលអាចធ្វើឲ្យ balance ចូល
-    អវិជ្ជមាន (double-spend)។ Return (True, new_balance) បើជោគជ័យ, ឬ
-    (False, current_balance) បើលុយមិនគ្រប់។"""
-    with _lock:
-        users = load_users()
-        uid = str(uid)
-        if uid not in users:
-            users[uid] = {"balance": 0.0, "orders": 0}
-        current = users[uid]["balance"]
-        if current < amount:
-            return False, current
-        users[uid]["balance"] = round(current - amount, 2)
-        save_users(users)
-        return True, users[uid]["balance"]
-
-
 def stock_path(product_key):
     return os.path.join(STOCK_DIR, f"{product_key}.txt")
 
@@ -1667,22 +1648,26 @@ def cmd_start(message):
         f"✨ <i>ព័ត៌មានជំនួយ:</i> ត្រូវបញ្ចូលលុយចូល Wallet សិន រួចជ្រើសរើសទិញបាន — account ផ្ញើមកភ្លាមៗដោយស្វ័យប្រវត្តិ!\n"
         f"🙏 អរគុណដែលទុកចិត្ត {STORE_NAME}"
     )
-    # ផ្ញើសារតែមួយប៉ុណ្ណោះ (reply keyboard ភ្ជាប់ជាមួយសារនេះតែម្តង) — កុំឲ្យម៉ឺនុយបង្ហាញស្ទួនគ្នា ២ ដង
+    # ផ្ញើសារ ២ (welcome text + reply keyboard ជាមុនសិន បន្ទាប់មកជា inline ប៊ូតុង "🛍 បើក {STORE_NAME}"
+    # ដាច់ដោយឡែក)។ សំខាន់៖ ត្រូវប្រើ InlineKeyboardButton (មិនមែន web_app ក្នុង ReplyKeyboardMarkup ទេ)
+    # ដើម្បីធានាថា Mini App ទទួល initData ត្រឹមត្រូវ (មើលចំណាំក្នុង _miniapp_open_kb())។ ចាស់ៗ
+    # ធ្លាប់ដាក់ web_app ដោយផ្ទាល់ក្នុង reply keyboard ដែលបណ្តាលឲ្យ profile/wallet ទទេ ពេលបើកតាមផ្លូវនោះ។
     try:
         bot.send_message(message.chat.id, text, reply_markup=reply_kb_for(message.from_user.id))
     except Exception as e:
-        # Telegram បដិសេធ web_app button (ឧ. MINIAPP_URL មិនមែន https ត្រឹមត្រូវ) —
-        # log ឲ្យឃើញច្បាស់ក្នុង Render logs ហើយព្យាយាមផ្ញើម្តងទៀតដោយប៊ូតុងធម្មតា
-        # ដើម្បីកុំឲ្យ /start ស្ងាត់សោះ (user គ្មានចម្លើយអ្វីទាំងអស់)
-        print(f"[cmd_start] send_message with miniapp keyboard failed: {e}", flush=True)
-        fallback_kb = None
-        if MINIAPP_URL:
+        print(f"[cmd_start] send_message with reply keyboard failed: {e}", flush=True)
+    open_kb = _miniapp_open_kb("shop", f"🛍 បើក {STORE_NAME}")
+    if open_kb:
+        try:
+            bot.send_message(message.chat.id, f"👇 ចុចប៊ូតុងខាងក្រោម ដើម្បីចូលទៅកាន់ {STORE_NAME}", reply_markup=open_kb)
+        except Exception as e:
+            print(f"[cmd_start] inline open-app button failed: {e}", flush=True)
             fallback_kb = types.InlineKeyboardMarkup()
             fallback_kb.add(types.InlineKeyboardButton(f"🛍 បើក {STORE_NAME}", url=MINIAPP_URL))
-        try:
-            bot.send_message(message.chat.id, text, reply_markup=fallback_kb)
-        except Exception as e2:
-            print(f"[cmd_start] fallback send_message also failed: {e2}", flush=True)
+            try:
+                bot.send_message(message.chat.id, f"👇 ចុចប៊ូតុងខាងក្រោម ដើម្បីចូលទៅកាន់ {STORE_NAME}", reply_markup=fallback_kb)
+            except Exception as e2:
+                print(f"[cmd_start] fallback url button also failed: {e2}", flush=True)
 
 
 @bot.message_handler(commands=["wallet"])
@@ -1730,7 +1715,6 @@ def reply_shop(message):
     kb = _miniapp_open_kb("shop", f"🛍 បើក {STORE_NAME}")
     if kb:
         bot.send_message(message.chat.id, "👇 ឬចុចទីនេះ", reply_markup=kb)
-
 
 @bot.message_handler(func=lambda m: norm_label(m.text) == norm_label(BTN_WALLET))
 def reply_wallet(message):
@@ -2861,13 +2845,7 @@ def handle_buy_wallet(call, product_key, qty=1):
         bot.answer_callback_query(call.id, "❌ ស្តុកអស់ភ្លាមៗ សូមព្យាយាមម្តងទៀត", show_alert=True)
         return
 
-    # atomic check-and-deduct — ការពារ double-spend បើ user ចុចទិញលឿនៗច្រើនដង
-    deducted, _new_balance = try_deduct_balance(uid, total_price)
-    if not deducted:
-        push_stock_items(product_key, items)  # ដាក់ stock ត្រឡប់វិញ លុយមិនគ្រប់ (race condition)
-        bot.answer_callback_query(call.id, "❌ សមតុល្យមិនគ្រប់គ្រាន់ សូម /deposit មុន", show_alert=True)
-        return
-
+    update_balance(uid, -total_price)
     orders = load_orders()
     orders.append({
         "uid": uid,
@@ -3934,12 +3912,7 @@ def api_perform_purchase(uid, product_key, qty=1):
         push_stock_items(product_key, items)  # ដាក់ត្រឡប់វិញ បើយកមិនគ្រប់ (race condition)
         return {"ok": False, "error": "out_of_stock_race"}
 
-    # atomic check-and-deduct — ការពារ double-spend បើ request ២ មកដំណាលគ្នា
-    # (balance check ខាងលើគ្រាន់តែជា early-exit, ចំណុចពិតត្រូវសម្រេចត្រង់នេះ ក្នុង lock ជាមួយគ្នា)
-    deducted, new_balance = try_deduct_balance(uid, total_price)
-    if not deducted:
-        push_stock_items(product_key, items)  # ដាក់ stock ត្រឡប់វិញ លុយមិនគ្រប់ (race condition)
-        return {"ok": False, "error": "insufficient_balance", "balance": new_balance, "required": total_price}
+    new_balance = update_balance(uid, -total_price)
     order_id = uuid.uuid4().hex[:10]
     orders = load_orders()
     orders.append({
@@ -3998,6 +3971,147 @@ def api_perform_purchase(uid, product_key, qty=1):
                 print(f"[broadcast_low_stock] failed: {e}", flush=True)
 
     return {"ok": True, "items": items, "total": total_price, "balance": new_balance, "order_id": order_id}
+
+
+def api_admin_sub_grant(target_uid, bot_token, store_name, rental_days=None, bakong_id=None, camrapidpay_api_key=None):
+    """Admin ជូន Bot ដោយឥតគិតថ្លៃ (skip payment ទាំងស្រុង) ដល់ user id ណាមួយ — deploy ភ្លាមៗ
+    ដូច command /activatesub ចាស់ តែហៅពី Mini App admin panel។
+    • បើមាន bakong_id ខ្លួនឯង (+ camrapidpay_api_key) → deploy ជា Bakong auto-payment ផ្ទាល់ខ្លួន,
+      គ្មានកាលកំណត់ (rental_days មិនអើពើ, ដូច flow ចាស់)។
+    • បើគ្មាន → deploy ជា rental_days ថ្ងៃ (ទុកទទេ = គ្មានកំណត់ពេលដែរ)។"""
+    bot_token = (bot_token or "").strip()
+    store_name = (store_name or "").strip()
+    bakong_id = (bakong_id or "").strip() or None
+    camrapidpay_api_key = (camrapidpay_api_key or "").strip() or None
+    if not _looks_like_bot_token(bot_token):
+        return {"ok": False, "error": "invalid_token"}
+    if not store_name or len(store_name) > 40:
+        return {"ok": False, "error": "invalid_store_name"}
+    try:
+        target_uid = int(target_uid)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid_uid"}
+    days = None
+    if not bakong_id and rental_days not in (None, "", 0):
+        try:
+            days = int(rental_days)
+            if days <= 0:
+                days = None
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid_days"}
+    set_sub(
+        target_uid, status="waiting_admin_deploy", bot_token=bot_token, store_name=store_name,
+        bakong_id=bakong_id, camrapidpay_api_key=camrapidpay_api_key, rental_days=days, amount_paid=0.0,
+        requested_at=time.strftime("%Y-%m-%d %H:%M:%S"), activated_at=None,
+        requester_label=f"Admin grant (uid {target_uid})", dep_ref=None, dep_id=None,
+    )
+    rec = get_sub(target_uid)
+    ok, info = deploy_subscriber_bot(target_uid, rec)
+    if not ok:
+        return {"ok": False, "error": "deploy_failed", "detail": info}
+    try:
+        bot.send_message(
+            target_uid,
+            "🎉 <b>Bot ជួលរបស់អ្នកដំណើរការរួចរាល់! (ឥតគិតថ្លៃពី Admin)</b>\nសូមចូលទៅកាន់ Bot របស់អ្នកបាន។",
+        )
+    except Exception as e:
+        print(f"[api_admin_sub_grant] failed to notify uid {target_uid}: {e}", flush=True)
+    return {"ok": True, "pid": info}
+
+
+def api_sub_status(uid):
+    """ស្ថានភាព subscription បច្ចុប្បន្នរបស់ user (សម្រាប់ Mini App បង្ហាញ tab ជាវ Bot)"""
+    rec = get_sub(uid) or {}
+    sub = None
+    if rec.get("bot_token") or rec.get("status"):
+        bt = rec.get("bot_token") or ""
+        masked = (bt[:6] + "…" + bt[-4:]) if len(bt) > 12 else (bt or None)
+        sub = {
+            "status": rec.get("status"),
+            "store_name": rec.get("store_name"),
+            "bot_token_masked": masked,
+            "bakong_id": rec.get("bakong_id"),
+            "rental_days": rec.get("rental_days"),
+            "amount_paid": rec.get("amount_paid"),
+            "expires_at_text": rec.get("expires_at_text"),
+            "dep_id": rec.get("dep_id"),
+        }
+    return {"ok": True, "is_subscriber_bot": IS_SUBSCRIBER_BOT, "rental_per_day": get_rental_per_day(), "sub": sub}
+
+
+def api_sub_start(uid, tg_user, bot_token, store_name, bakong_id):
+    """ជំហានទី១ ក្នុង Mini App៖ ទទួល Bot Token + ឈ្មោះហាង + (ស្រេចចិត្ត) Bakong ID ផ្ទាល់ខ្លួន —
+    ដូចគ្នាទៅនឹង subscribe_token_step + subscribe_storename_step ក្នុង chat flow ចាស់"""
+    if IS_SUBSCRIBER_BOT:
+        return {"ok": False, "error": "not_available"}
+    bot_token = (bot_token or "").strip()
+    store_name = (store_name or "").strip()
+    bakong_id = (bakong_id or "").strip() or None
+    if not _looks_like_bot_token(bot_token):
+        return {"ok": False, "error": "invalid_token"}
+    if not store_name or len(store_name) > 40:
+        return {"ok": False, "error": "invalid_store_name"}
+    label = f"@{tg_user['username']}" if tg_user.get("username") else (tg_user.get("first_name") or "User")
+    set_sub(
+        uid, status="collecting_days", bot_token=bot_token, store_name=store_name,
+        bakong_id=bakong_id, qr_photo_file_id=None, rental_days=None, amount_paid=None,
+        requested_at=time.strftime("%Y-%m-%d %H:%M:%S"), activated_at=None,
+        requester_label=label, dep_ref=None, dep_id=None,
+    )
+    return {"ok": True}
+
+
+def api_sub_pay(uid, days):
+    """ជំហានទី២ ក្នុង Mini App៖ គិតតម្លៃជួល ({days} × per-day) → បង្កើត Bakong KHQR ដូចគ្នាទៅនឹង
+    handle_sub_payment_auto ចាស់ — Mini App បង្ហាញ qr_url ជា <img> រួច poll /api/sub/check"""
+    rec = get_sub(uid) or {}
+    if not rec.get("bot_token"):
+        return {"ok": False, "error": "no_token"}
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid_days"}
+    if days <= 0:
+        return {"ok": False, "error": "invalid_days"}
+    total = round(days * get_rental_per_day(), 2)
+    ref = f"KZSUB{uid}{int(time.time())}"[:50]
+    dep_id = f"SUB-{hashlib.md5(ref.encode()).hexdigest()[:10].upper()}"
+    data = camrapid_create(total, ref)
+    if not data:
+        return {"ok": False, "error": "gateway_error", "detail": _last_camrapid_error}
+    qr_string = data.get("qr_code", "")
+    payment_url = data.get("payment_url", "")
+    img_buf = build_qr_image(
+        qr_string, amount=total, ref=dep_id, label="Bot Rental",
+        subtitle=f"{STORE_NAME} · Bakong KHQR",
+    ) if qr_string else None
+    if img_buf:
+        with _API_QR_CACHE_LOCK:
+            _API_QR_CACHE[dep_id] = img_buf.getvalue()
+    set_sub(uid, status="waiting_payment", rental_days=days, amount_paid=total, dep_ref=ref, dep_id=dep_id)
+    return {
+        "ok": True, "dep_id": dep_id, "amount": total, "days": days,
+        "qr_url": f"/api/qr/{dep_id}.png", "payment_url": payment_url,
+    }
+
+
+def api_sub_check(uid):
+    """Mini App poll endpoint៖ ត្រួតពិនិត្យការទូទាត់ថ្លៃជួល Bot (auto-detect ដូច wallet deposit) —
+    ពេលទូទាត់ជោគជ័យ ប្តូរ status ទៅ waiting_admin_deploy ហើយជូនដំណឹង Admin ភ្លាមៗ"""
+    rec = get_sub(uid) or {}
+    status = rec.get("status")
+    if status == "waiting_payment" and rec.get("dep_ref"):
+        if camrapid_check(rec.get("dep_ref")):
+            set_sub(uid, status="waiting_admin_deploy")
+            _notify_admin_new_sub(
+                uid, rec.get("requester_label") or "User", rec.get("bot_token"),
+                store_name=rec.get("store_name"), bakong_id=rec.get("bakong_id"),
+                rental_days=rec.get("rental_days"), amount_paid=rec.get("amount_paid"),
+                qr_photo_file_id=rec.get("qr_photo_file_id"),
+            )
+            rec = get_sub(uid) or {}
+            status = rec.get("status")
+    return {"ok": True, "status": status, "expires_at_text": rec.get("expires_at_text")}
 
 
 def api_create_deposit(uid, amount):
@@ -4113,7 +4227,7 @@ def start_keep_alive():
         except FileNotFoundError:
             return (
                 "miniapp/miniapp.html រកមិនឃើញទេ — សូមប្រាកដថាបានដាក់ file នេះនៅជាមួយ "
-                "premium_shop_bot_v10.py ក្នុង path miniapp/miniapp.html", 404,
+                "premium_shop_bot_v11.py ក្នុង path miniapp/miniapp.html", 404,
             )
 
     @app.route("/img/<path:filename>")
@@ -4541,6 +4655,54 @@ def start_keep_alive():
             out.append({"rating": r.get("rating", 0), "comment": r.get("comment", ""), "time": r.get("time"), "name": name})
         rating = get_product_rating(key)
         return jsonify({"ok": True, "reviews": out, "avg": rating["avg"], "count": rating["count"]})
+
+    @app.route("/api/admin/sub/grant", methods=["POST", "OPTIONS"])
+    def api_admin_sub_grant_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_admin()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        return jsonify(api_admin_sub_grant(
+            body.get("target_uid"), body.get("bot_token"), body.get("store_name"), body.get("rental_days"),
+            body.get("bakong_id"), body.get("camrapidpay_api_key"),
+        ))
+
+    @app.route("/api/sub/status", methods=["GET"])
+    def api_sub_status_route():
+        uid, err = _require_uid()
+        if err:
+            return err
+        return jsonify(api_sub_status(uid))
+
+    @app.route("/api/sub/start", methods=["POST", "OPTIONS"])
+    def api_sub_start_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_uid()
+        if err:
+            return err
+        tg_user = _verify_webapp_init_data(_get_init_data()) or {}
+        body = flask_request.get_json(silent=True) or {}
+        return jsonify(api_sub_start(uid, tg_user, body.get("bot_token"), body.get("store_name"), body.get("bakong_id")))
+
+    @app.route("/api/sub/pay", methods=["POST", "OPTIONS"])
+    def api_sub_pay_route():
+        if flask_request.method == "OPTIONS":
+            return "", 204
+        uid, err = _require_uid()
+        if err:
+            return err
+        body = flask_request.get_json(silent=True) or {}
+        return jsonify(api_sub_pay(uid, body.get("days")))
+
+    @app.route("/api/sub/check", methods=["GET"])
+    def api_sub_check_route():
+        uid, err = _require_uid()
+        if err:
+            return err
+        return jsonify(api_sub_check(uid))
 
     @app.route("/api/promo", methods=["GET"])
     def api_promo_route():
